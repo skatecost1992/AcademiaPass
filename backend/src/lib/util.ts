@@ -1,0 +1,74 @@
+import { randomBytes } from 'node:crypto';
+import { z } from 'zod';
+import { HttpError } from '../auth.ts';
+import type { Db } from '../db.ts';
+
+/** Zona horaria del negocio: agrupa reportes por semana/mes y valida horarios de atencion */
+export const TZ = process.env.APP_TIMEZONE ?? 'America/Bogota';
+
+export function parse<T extends z.ZodType>(schema: T, data: unknown): z.infer<T> {
+  const r = schema.safeParse(data);
+  if (!r.success) {
+    const first = r.error.issues[0];
+    const field = first.path.join('.');
+    throw new HttpError(400, field ? `${field}: ${first.message}` : first.message, 'VALIDATION', { issues: r.error.issues });
+  }
+  return r.data;
+}
+
+const OWNED_TABLES = ['academies', 'sites', 'spaces', 'teachers', 'classes', 'bookings', 'plans', 'memberships', 'payments', 'users', 'photos'] as const;
+
+/** Devuelve la fila si pertenece al tenant; si no, 404 (no revela que exista en otra organizacion, RQ25) */
+export async function own<T = any>(db: Db, table: (typeof OWNED_TABLES)[number], id: number, tenantId: number, what = 'Registro'): Promise<T> {
+  if (!OWNED_TABLES.includes(table)) throw new Error('tabla no permitida');
+  const [row] = await db.query(`SELECT * FROM ${table} WHERE id = $1 AND tenant_id = $2`, [id, tenantId]);
+  if (!row) throw new HttpError(404, `${what} no encontrado`, 'NOT_FOUND');
+  return row as T;
+}
+
+/** Comprueba que todos los ids pertenezcan al tenant */
+export async function ownAll(db: Db, table: 'academies' | 'sites', ids: number[], tenantId: number) {
+  if (ids.length === 0) return;
+  const rows = await db.query(`SELECT id FROM ${table} WHERE id = ANY($1::int[]) AND tenant_id = $2`, [ids, tenantId]);
+  if (rows.length !== new Set(ids).size) throw new HttpError(404, 'Alguna academia o sede no existe', 'NOT_FOUND');
+}
+
+export function joinCode() {
+  // Sin 0/O/1/I para que se pueda dictar por telefono
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = randomBytes(6);
+  return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('');
+}
+
+/** Dia de la semana (0 = domingo) y hora 'HH:MM' de un instante en la zona del negocio */
+export function localParts(d: Date) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)!.value;
+  const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(get('weekday'));
+  return { day, time: `${get('hour')}:${get('minute')}`, date: `${get('year')}-${get('month')}-${get('day')}` };
+}
+
+/** Fecha de hoy 'YYYY-MM-DD' en la zona del negocio */
+export const todayLocal = () => localParts(new Date()).date;
+
+export function addDays(date: string, days: number) {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+export const id = z.coerce.number().int().positive();
+export const optId = z.coerce.number().int().positive().optional();
+export const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato AAAA-MM-DD');
+export const timeStr = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Formato HH:MM');
+export const isoDateTime = z.string().refine((s) => !Number.isNaN(Date.parse(s)), 'Fecha y hora inválidas');
+export const text = (max = 200) => z.string().trim().min(1, 'Obligatorio').max(max);
+export const optText = (max = 500) => z.string().trim().max(max).optional().nullable().transform((v) => (v ? v : null));
+
+/** Rango de fechas de los reportes: por defecto los ultimos 90 dias */
+export function range(q: { from?: string; to?: string }) {
+  const to = q.to ?? todayLocal();
+  const from = q.from ?? addDays(to, -90);
+  if (from > to) throw new HttpError(400, 'La fecha inicial es mayor que la final');
+  return { from, to };
+}

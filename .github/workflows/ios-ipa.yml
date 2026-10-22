@@ -1,0 +1,74 @@
+# Compila la app iOS en un Mac de GitHub (macos-latest) y publica dos artefactos:
+#   - AcademiaPass-unsigned.ipa : IPA sin firmar. Se instala en un iPhone con Sideloadly o AltStore,
+#                              que lo firman con tu Apple ID gratuito (valido 7 dias).
+#   - AcademiaPass-simulator    : .app para el simulador de iOS (Xcode).
+# Para un IPA firmado (TestFlight / Ad Hoc) usa app-ios/build-ipa.sh en un Mac con tu TEAM_ID.
+#
+# Se ejecuta a mano desde la pestana Actions (Run workflow) o al subir cambios de app-ios/.
+name: iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'app-ios/**'
+      - '.github/workflows/ios-ipa.yml'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app-ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Dependencias
+        run: npm ci --legacy-peer-deps
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Generar proyecto Xcode (prebuild)
+        run: npx expo prebuild --platform ios --no-install && cd ios && pod install
+
+      - name: Compilar para dispositivo sin firmar
+        run: |
+          xcodebuild build \
+            -workspace ios/AcademiaPass.xcworkspace \
+            -scheme AcademiaPass \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/device \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+          mkdir -p build/Payload
+          cp -R build/device/Build/Products/Release-iphoneos/AcademiaPass.app build/Payload/
+          VERSION=$(node -p "require('./app.json').expo.version")
+          (cd build && zip -qr "AcademiaPass-$VERSION-unsigned.ipa" Payload)
+
+      - name: Compilar para simulador
+        run: |
+          xcodebuild build \
+            -workspace ios/AcademiaPass.xcworkspace \
+            -scheme AcademiaPass \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/sim \
+            CODE_SIGNING_ALLOWED=NO
+          (cd build/sim/Build/Products/Release-iphonesimulator && zip -qr ../../../../AcademiaPass-simulator.zip AcademiaPass.app)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AcademiaPass-unsigned-ipa
+          path: app-ios/build/*.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AcademiaPass-simulator
+          path: app-ios/build/AcademiaPass-simulator.zip

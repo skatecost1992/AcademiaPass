@@ -1,0 +1,33 @@
+# Blueprint de Render: API + version web + base de datos PostgreSQL en la nube (RQ24, RQ27).
+# Render > New > Blueprint > selecciona el repositorio. Crea el servicio web y la base de datos.
+# Si prefieres otra base (Neon, Supabase), borra la seccion databases y define DATABASE_URL a mano.
+services:
+  - type: web
+    name: academiapass
+    runtime: node
+    plan: free
+    buildCommand: cd backend && npm ci && cd ../app-android && npm ci --legacy-peer-deps && npm run build:web
+    startCommand: cd backend && npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: APP_TIMEZONE
+        value: America/Bogota
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: academiapass-db
+          property: connectionString
+      - key: PGSSL
+        value: "off" # la conexion interna de Render no usa SSL
+      - key: ADMIN_SIGNUP_CODE
+        sync: false # opcional: si lo defines, solo quien lo conozca puede registrar una organizacion
+
+databases:
+  - name: academiapass-db
+    plan: free
+    databaseName: academiapass

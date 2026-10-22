@@ -1,0 +1,13 @@
+node_modules/
+.data/
+.env
+backend/public/
+app-*/android/
+app-*/ios/
+app-*/.expo/
+app-*/dist/
+app-*/build/
+*.log
+*.apk
+*.ipa
+app-*/android/

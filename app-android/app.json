@@ -1,0 +1,79 @@
+{
+  "expo": {
+    "name": "AcademiaPass",
+    "slug": "academiapass-android",
+    "scheme": "academiapass",
+    "version": "1.0.0",
+    "platforms": [
+      "android",
+      "web"
+    ],
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "com.cristhianhernandez.academiapass",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0F766E",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-status-bar",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "backgroundColor": "#F1F5F4"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "AcademiaPass usa la cámara para leer el código QR de los clientes y tomar fotos de sedes y espacios.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "AcademiaPass necesita tus fotos para cargar imágenes de sedes y espacios.",
+          "cameraPermission": "AcademiaPass usa la cámara para tomar fotos de sedes y espacios."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "./plugins/withCmakeVersion",
+        {
+          "version": "3.31.6"
+        }
+      ],
+      "expo-font",
+      "expo-sharing"
+    ],
+    "extra": {
+      "apiUrl": ""
+    }
+  }
+}

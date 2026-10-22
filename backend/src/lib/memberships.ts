@@ -2,7 +2,7 @@
  * Planes adquiridos por un cliente con su cobertura (academias y sedes) y saldo de clases (RQ7, RQ11, RQ12, RQ16).
  */
 import type { Db } from '../db.ts';
-import { todayLocal } from './util.ts';
+import { idList, todayLocal } from './util.ts';
 
 export interface MembershipView {
   id: number;
@@ -24,30 +24,38 @@ export interface MembershipView {
   is_current: boolean; // activo, vigente hoy y con saldo
 }
 
+/** Academias y sedes de cada plan: { planId: { academies, sites } } */
+export async function planPlaces(db: Db, planIds: number[]) {
+  const out = new Map<number, { academies: { id: number; name: string }[]; sites: { id: number; name: string }[] }>();
+  for (const pid of planIds) out.set(pid, { academies: [], sites: [] });
+  if (!planIds.length) return out;
+  const list = idList([...new Set(planIds)]);
+  const academies = await db.query(`SELECT pa.plan_id, a.id, a.name FROM plan_academies pa JOIN academies a ON a.id = pa.academy_id WHERE pa.plan_id IN ${list} ORDER BY a.name`);
+  const sites = await db.query(`SELECT ps.plan_id, s.id, s.name FROM plan_sites ps JOIN sites s ON s.id = ps.site_id WHERE ps.plan_id IN ${list} ORDER BY s.name`);
+  for (const a of academies) out.get(a.plan_id)!.academies.push({ id: a.id, name: a.name });
+  for (const x of sites) out.get(x.plan_id)!.sites.push({ id: x.id, name: x.name });
+  return out;
+}
+
 export async function membershipsOf(db: Db, clientIds: number[]): Promise<MembershipView[]> {
   if (clientIds.length === 0) return [];
   const rows = await db.query(
     `SELECT m.id, m.client_id, m.plan_id, p.name AS plan_name, p.kind, m.starts_on, m.ends_on, m.units_total, m.units_used,
-            m.status, p.all_sites, p.price::float8 AS price,
-            coalesce((SELECT json_agg(json_build_object('id', a.id, 'name', a.name) ORDER BY a.name)
-                        FROM plan_academies pa JOIN academies a ON a.id = pa.academy_id WHERE pa.plan_id = p.id), '[]') AS academies,
-            coalesce((SELECT json_agg(json_build_object('id', s.id, 'name', s.name) ORDER BY s.name)
-                        FROM plan_sites ps JOIN sites s ON s.id = ps.site_id WHERE ps.plan_id = p.id), '[]') AS sites,
-            (SELECT coalesce(sum(amount), 0)::float8 FROM payments pay WHERE pay.membership_id = m.id) AS paid
+            m.status, p.all_sites, p.price,
+            (SELECT coalesce(sum(amount), 0) FROM payments pay WHERE pay.membership_id = m.id) AS paid
        FROM memberships m JOIN plans p ON p.id = m.plan_id
-      WHERE m.client_id = ANY($1::int[])
+      WHERE m.client_id IN ${idList(clientIds)}
       ORDER BY m.ends_on DESC, m.id DESC`,
-    [clientIds],
   );
+  const places = await planPlaces(db, rows.map((m) => m.plan_id));
   const today = todayLocal();
   return rows.map((m) => {
-    const academies = typeof m.academies === 'string' ? JSON.parse(m.academies) : m.academies;
-    const sites = typeof m.sites === 'string' ? JSON.parse(m.sites) : m.sites;
     const remaining = m.units_total == null ? null : Math.max(0, m.units_total - m.units_used);
     return {
       ...m,
-      academies,
-      sites,
+      ...places.get(m.plan_id)!,
+      price: Number(m.price),
+      paid: Number(m.paid),
       remaining,
       is_current: m.status === 'active' && m.starts_on <= today && today <= m.ends_on && (remaining == null || remaining > 0),
     };

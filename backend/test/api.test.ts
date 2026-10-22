@@ -10,9 +10,11 @@ process.env.PGLITE_DIR = 'memory://';
 process.env.JWT_SECRET = 'test-secret';
 const { createApp } = await import('../src/app.ts');
 const { openDb } = await import('../src/db.ts');
+const { ensureAdmin } = await import('../src/bootstrap.ts');
 
 let base = '';
 let close = () => {};
+let database: Awaited<ReturnType<typeof openDb>>;
 
 async function call(method: string, path: string, body?: unknown, token?: string) {
   const res = await fetch(base + path, {
@@ -37,6 +39,7 @@ const todayAt = (h: number, m = 0) => {
 
 before(async () => {
   const db = await openDb();
+  database = db;
   const server = createApp(db).listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
@@ -46,6 +49,17 @@ after(() => close());
 
 describe('AcademiaPass API', () => {
   const s: Record<string, any> = {};
+
+  it('crea el usuario admin en la tabla users con clave cifrada y no lo duplica', async () => {
+    assert.equal(await ensureAdmin(database), true);
+    assert.equal(await ensureAdmin(database), false);
+    const [row] = await database.query(`SELECT password_hash, role FROM users WHERE username = 'admin'`);
+    assert.equal(row.role, 'admin');
+    assert.ok(row.password_hash.startsWith('$2') && !row.password_hash.includes('Bogota'), 'solo se guarda el hash');
+    const r = await ok('POST', '/auth/login', { username: 'admin', password: 'Bogota.2027' });
+    assert.equal(r.user.role, 'admin');
+    assert.equal((await call('POST', '/auth/login', { username: 'admin', password: 'otra' })).status, 401);
+  });
 
   it('registra un administrador con su organizacion, academia y sede (RQ23)', async () => {
     const r = await ok('POST', '/auth/register-admin', {
@@ -233,6 +247,24 @@ describe('AcademiaPass API', () => {
     assert.equal(dupe.body.code, 'ALREADY_REGISTERED');
     const join = await call('POST', '/me/academies', { joinCode: s.academyA.join_code }, reg.token);
     assert.equal(join.body.code, 'OTHER_TENANT');
+  });
+
+  it('borra espacios, sedes y academias con lo que depende de ellos', async () => {
+    // Espacio con reservas sin pagos: se borra junto con ellas
+    assert.equal((await call('DELETE', `/spaces/${s.cancha.id}`, undefined, s.admin)).status, 204);
+    // Academia con asistencias: no se borra
+    assert.equal((await call('DELETE', `/academies/${s.academyB.id}`, undefined, s.admin)).body.code, 'IN_USE');
+    // Academia nueva con sede, espacio, foto, clase y reserva: se borra completa
+    const tmp = await ok('POST', '/academies', { name: 'Temporal' }, s.admin);
+    const site = await ok('POST', '/sites', { academyId: tmp.id, name: 'Sede temporal' }, s.admin);
+    const space = await ok('POST', '/spaces', { siteId: site.id, name: 'Sala', maxCapacity: 5 }, s.admin);
+    const pixel = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    await ok('POST', '/photos', { ownerType: 'site', ownerId: site.id, mime: 'image/png', data: pixel }, s.admin);
+    const cls = await ok('POST', '/classes', { academyId: tmp.id, name: 'Clase temporal', defaultCapacity: 3 }, s.admin);
+    await ok('POST', '/bookings', { spaceId: space.id, kind: 'class', classId: cls.id, startsAt: todayAt(12), endsAt: todayAt(13) }, s.admin);
+    assert.equal((await call('DELETE', `/academies/${tmp.id}`, undefined, s.admin)).status, 204);
+    const academies = await ok('GET', '/academies', undefined, s.admin);
+    assert.ok(!academies.some((a: any) => a.id === tmp.id));
   });
 
   it('el cliente reserva un espacio y ve las reservas ajenas sin datos personales', async () => {

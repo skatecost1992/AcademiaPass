@@ -14,6 +14,9 @@
   `backend/public`, así la web y la API comparten dominio.
 - **Datos solo en la nube** (RQ24, RQ27): el teléfono guarda únicamente la URL del servidor y el token de sesión.
   Al instalar la app en otro teléfono e iniciar sesión se ve la misma información.
+- **Motores de base de datos**: PostgreSQL en la nube (`DATABASE_URL`), SQL Server en local (`DB_CLIENT=mssql`,
+  adaptador `src/db-mssql.ts`, esquema `sql/sqlserver/02_esquema.sql`) o PGlite para desarrollo. El SQL de las
+  rutas es común a los dos motores; ver `docs/SERVIDORES_Y_BASE_LOCAL.md`.
 - **Backend** Node 24 ejecuta TypeScript directamente (sin compilar). Dependencias: `express`, `pg`, `zod`,
   `jsonwebtoken`, `bcryptjs`, `express-rate-limit`, `cors` y `@electric-sql/pglite` (PostgreSQL embebido para
   desarrollo y pruebas, cuando no hay `DATABASE_URL`).

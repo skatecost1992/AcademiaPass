@@ -29,7 +29,7 @@ export async function own<T = any>(db: Db, table: (typeof OWNED_TABLES)[number],
 /** Comprueba que todos los ids pertenezcan al tenant */
 export async function ownAll(db: Db, table: 'academies' | 'sites', ids: number[], tenantId: number) {
   if (ids.length === 0) return;
-  const rows = await db.query(`SELECT id FROM ${table} WHERE id = ANY($1::int[]) AND tenant_id = $2`, [ids, tenantId]);
+  const rows = await db.query(`SELECT id FROM ${table} WHERE id IN ${idList([...new Set(ids)])} AND tenant_id = $1`, [tenantId]);
   if (rows.length !== new Set(ids).size) throw new HttpError(404, 'Alguna academia o sede no existe', 'NOT_FOUND');
 }
 
@@ -64,6 +64,40 @@ export const timeStr = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Formato HH
 export const isoDateTime = z.string().refine((s) => !Number.isNaN(Date.parse(s)), 'Fecha y hora inválidas');
 export const text = (max = 200) => z.string().trim().min(1, 'Obligatorio').max(max);
 export const optText = (max = 500) => z.string().trim().max(max).optional().nullable().transform((v) => (v ? v : null));
+
+/**
+ * Lista de ids para `col IN ${idList(ids)}`. Los ids son enteros validados, asi que se escriben en el SQL:
+ * funciona igual en PostgreSQL y SQL Server (que no tiene arreglos como parametro).
+ */
+export function idList(ids: number[]) {
+  if (ids.some((n) => !Number.isSafeInteger(n))) throw new Error('id invalido');
+  return ids.length ? `(${ids.join(', ')})` : '(NULL)';
+}
+
+/** Desfase (ms) de la zona del negocio respecto a UTC en un instante */
+function tzOffset(at: Date) {
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(at);
+  const g = (t: string) => Number(p.find((x) => x.type === t)!.value);
+  return Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute'), g('second')) - at.getTime();
+}
+
+/** Instante en que empieza el dia 'YYYY-MM-DD' en la zona del negocio */
+export function startOfLocalDay(date: string) {
+  const guess = new Date(`${date}T00:00:00Z`);
+  return new Date(guess.getTime() - tzOffset(guess));
+}
+
+/** [inicio de `from`, inicio del dia siguiente a `to`) en la zona del negocio, para filtrar por fecha local */
+export function dayBounds(from: string, to: string): [Date, Date] {
+  return [startOfLocalDay(from), startOfLocalDay(addDays(to, 1))];
+}
+
+/** Inicio de la semana (lunes) o del mes de un instante, como 'YYYY-MM-DD' local */
+export function periodStart(at: Date, groupBy: 'week' | 'month') {
+  const { date, day } = localParts(at);
+  if (groupBy === 'month') return `${date.slice(0, 8)}01`;
+  return addDays(date, -((day + 6) % 7));
+}
 
 /** Rango de fechas de los reportes: por defecto los ultimos 90 dias */
 export function range(q: { from?: string; to?: string }) {

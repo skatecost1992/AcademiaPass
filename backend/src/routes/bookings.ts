@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { HttpError, isStaffish } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { assertSpaceAvailable, assertWithinOpeningHours, type Space } from '../lib/capacity.ts';
-import { TZ, dateStr, id, isoDateTime, optId, optText, own, parse, range, todayLocal } from '../lib/util.ts';
+import { dateStr, dayBounds, id, idList, isoDateTime, optId, optText, own, parse, range, todayLocal } from '../lib/util.ts';
 import { visibleAcademyIds } from './setup.ts';
 
 const WEEK_MS = 7 * 24 * 3600_000;
@@ -35,7 +35,7 @@ export const BOOKING_SELECT = `
          b.class_id, b.teacher_id, b.client_id,
          sp.name AS space_name, s.name AS site_name, s.academy_id, a.name AS academy_name,
          t.full_name AS teacher_name, t.kind AS teacher_kind, cu.full_name AS client_name,
-         (SELECT count(*)::int FROM attendances at WHERE at.booking_id = b.id) AS attendees,
+         (SELECT count(*)::int FROM attendances att WHERE att.booking_id = b.id) AS attendees,
          (SELECT coalesce(sum(amount), 0)::float8 FROM payments p WHERE p.booking_id = b.id) AS paid
     FROM bookings b
     JOIN spaces sp ON sp.id = b.space_id
@@ -103,7 +103,7 @@ async function createBookings(db: Db, req: Request, b: z.infer<typeof bookingBod
       );
       created.push(row.id);
     }
-    return q.query(`${BOOKING_SELECT} WHERE b.id = ANY($1::int[]) ORDER BY b.starts_at`, [created]);
+    return q.query(`${BOOKING_SELECT} WHERE b.id IN ${idList(created)} ORDER BY b.starts_at`);
   });
 }
 
@@ -124,15 +124,16 @@ export function bookingRoutes(db: Db) {
     const today = todayLocal();
     const { from, to } = range({ from: q.from ?? today, to: q.to ?? q.from ?? today });
     const academies = await visibleAcademyIds(db, req);
+    const [start, end] = dayBounds(from, to);
     const rows = await db.query(
       `${BOOKING_SELECT}
-        WHERE b.tenant_id = $1 AND s.academy_id = ANY($2::int[])
-          AND b.starts_at >= ($3::date::timestamp AT TIME ZONE $5) AND b.starts_at < (($4::date + 1)::timestamp AT TIME ZONE $5)
-          AND ($6::int IS NULL OR b.site_id = $6) AND ($7::int IS NULL OR b.space_id = $7)
-          AND ($8::int IS NULL OR s.academy_id = $8) AND ($9::text IS NULL OR b.kind = $9)
-          AND ($10 OR b.status = 'confirmed')
+        WHERE b.tenant_id = $1 AND s.academy_id IN ${idList(academies)}
+          AND b.starts_at >= $2 AND b.starts_at < $3
+          AND ($4::int IS NULL OR b.site_id = $4) AND ($5::int IS NULL OR b.space_id = $5)
+          AND ($6::int IS NULL OR s.academy_id = $6) AND ($7::text IS NULL OR b.kind = $7)
+          AND ($8 = true OR b.status = 'confirmed')
         ORDER BY b.starts_at`,
-      [req.user.tenantId, academies, from, to, TZ, q.siteId ?? null, q.spaceId ?? null, q.academyId ?? null, q.kind ?? null, !!q.includeCancelled],
+      [req.user.tenantId, start, end, q.siteId ?? null, q.spaceId ?? null, q.academyId ?? null, q.kind ?? null, !!q.includeCancelled],
     );
     if (isStaffish(req.user)) return res.json(rows);
     res.json(rows.map((b) => (b.kind === 'rental' && b.client_id !== req.user.id
@@ -145,7 +146,7 @@ export function bookingRoutes(db: Db) {
     const [b] = await db.query(`${BOOKING_SELECT} WHERE b.id = $1 AND b.tenant_id = $2`, [bid, req.user.tenantId]);
     if (!b || (!isStaffish(req.user) && b.client_id !== req.user.id)) throw new HttpError(404, 'Reserva no encontrada', 'NOT_FOUND');
     const attendees = isStaffish(req.user)
-      ? await db.query(`SELECT at.id, at.scanned_at, at.over_capacity, u.id AS client_id, u.full_name FROM attendances at JOIN users u ON u.id = at.client_id WHERE at.booking_id = $1 ORDER BY at.scanned_at`, [bid])
+      ? await db.query(`SELECT att.id, att.scanned_at, att.over_capacity, u.id AS client_id, u.full_name FROM attendances att JOIN users u ON u.id = att.client_id WHERE att.booking_id = $1 ORDER BY att.scanned_at`, [bid])
       : [];
     const payments = await db.query(`SELECT id, amount::float8, method, reference, paid_at FROM payments WHERE booking_id = $1 ORDER BY paid_at`, [bid]);
     res.json({ ...b, attendeeList: attendees, payments });

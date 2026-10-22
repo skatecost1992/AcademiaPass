@@ -35,7 +35,8 @@ Versión web: `cd app-android && npm install --legacy-peer-deps && npm run build
 2. En la app, en *Configurar servidor* (pantalla de ingreso), escribe la URL pública, p. ej.
    `https://academiapass.onrender.com`. Todos los teléfonos y la web ven los mismos datos.
 
-Paso a paso en [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md). Arquitectura, modelo de datos y reglas en
+Paso a paso en [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md). Selector nube/local (usuario de configuración `admin`)
+y base en SQL Server en [`docs/SERVIDORES_Y_BASE_LOCAL.md`](docs/SERVIDORES_Y_BASE_LOCAL.md). Arquitectura, modelo de datos y reglas en
 [`docs/MANUAL_TECNICO.md`](docs/MANUAL_TECNICO.md). Uso por rol en [`docs/GUIA_DE_USO.md`](docs/GUIA_DE_USO.md).
 
 ## Pruebas

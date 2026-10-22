@@ -7,30 +7,58 @@
  *  - /reports/payments                pagos por periodo, medio y concepto
  *  - /reports/summary                 reporte que agrupa los anteriores (RQ22)
  * Todo filtra por la organizacion del usuario (RQ25).
+ *
+ * Las consultas solo filtran (iguales en PostgreSQL y SQL Server); la agrupacion por dia, semana y mes se hace
+ * aqui con la zona horaria del negocio.
  */
 import { Router } from 'express';
 import { z } from 'zod';
 import { HttpError, requirePerm } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { membershipsOf } from '../lib/memberships.ts';
-import { TZ, addDays, dateStr, id, optId, own, parse, range, todayLocal } from '../lib/util.ts';
+import { addDays, dateStr, dayBounds, id, localParts, optId, own, parse, periodStart, range, todayLocal } from '../lib/util.ts';
 
 const filters = z.object({
   from: dateStr.optional(), to: dateStr.optional(), academyId: optId, siteId: optId,
   groupBy: z.enum(['week', 'month']).default('week'),
 });
 type Filters = z.infer<typeof filters> & { from: string; to: string };
+type G = 'week' | 'month';
 
-// La zona va dentro del SQL (no como parametro) para que GROUP BY reconozca la misma expresion
-const TZQ = TZ.replace(/'/g, '');
-const period = (g: 'week' | 'month', col = 'at.scanned_at') => `date_trunc('${g === 'week' ? 'week' : 'month'}', ${col} AT TIME ZONE '${TZQ}')::date::text`;
-const localDay = (col = 'at.scanned_at') => `(${col} AT TIME ZONE '${TZQ}')::date`;
+interface AttRow {
+  id: number; scanned_at: Date; client_id: number; client_name: string; academy_id: number; academy_name: string;
+  site_id: number; site_name: string; booking_title: string | null; plan_name: string | null; over_capacity: boolean;
+}
 
-/** Condicion comun de rango y filtros para attendances (parametros $1..$5) */
-const AT_WHERE = `at.tenant_id = $1
-  AND at.scanned_at >= ($2::date::timestamp AT TIME ZONE '${TZQ}') AND at.scanned_at < (($3::date + 1)::timestamp AT TIME ZONE '${TZQ}')
-  AND ($4::int IS NULL OR at.academy_id = $4) AND ($5::int IS NULL OR at.site_id = $5)`;
-const atParams = (tenantId: number, f: Filters) => [tenantId, f.from, f.to, f.academyId ?? null, f.siteId ?? null];
+/** Agrupa filas por clave conservando el orden de aparicion */
+function groupBy<T>(rows: T[], key: (r: T) => string) {
+  const m = new Map<string, T[]>();
+  for (const r of rows) {
+    const k = key(r);
+    m.set(k, [...(m.get(k) ?? []), r]);
+  }
+  return m;
+}
+const dayOf = (r: AttRow) => localParts(new Date(r.scanned_at)).date;
+const distinct = <T>(rows: T[], f: (r: T) => unknown) => new Set(rows.map(f)).size;
+const byPeriodDesc = (a: { period: string }, b: { period: string }) => b.period.localeCompare(a.period);
+const pct = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 1000) / 10 : 0);
+
+/** Ingresos del periodo con filtros de academia, sede y cliente */
+async function attendanceRows(db: Db, tenantId: number, f: Filters, clientId?: number): Promise<AttRow[]> {
+  const [start, end] = dayBounds(f.from, f.to);
+  return db.query(
+    `SELECT att.id, att.scanned_at, att.client_id, u.full_name AS client_name, att.academy_id, a.name AS academy_name,
+            att.site_id, s.name AS site_name, b.title AS booking_title, pl.name AS plan_name, att.over_capacity
+       FROM attendances att
+       JOIN users u ON u.id = att.client_id JOIN academies a ON a.id = att.academy_id JOIN sites s ON s.id = att.site_id
+       LEFT JOIN bookings b ON b.id = att.booking_id LEFT JOIN memberships m ON m.id = att.membership_id LEFT JOIN plans pl ON pl.id = m.plan_id
+      WHERE att.tenant_id = $1 AND att.scanned_at >= $2 AND att.scanned_at < $3
+        AND ($4::int IS NULL OR att.academy_id = $4) AND ($5::int IS NULL OR att.site_id = $5) AND ($6::int IS NULL OR att.client_id = $6)
+      ORDER BY att.scanned_at DESC`,
+    [tenantId, start, end, f.academyId ?? null, f.siteId ?? null, clientId ?? null],
+  );
+}
 
 export async function unifiedReport(db: Db, tenantId: number, clientId: number, from: string, to: string) {
   const [client] = await db.query(
@@ -39,137 +67,134 @@ export async function unifiedReport(db: Db, tenantId: number, clientId: number, 
     [clientId, tenantId],
   );
   if (!client) throw new HttpError(404, 'Cliente no encontrado', 'NOT_FOUND');
-  const f: Filters = { from, to, groupBy: 'week' };
-  const where = `${AT_WHERE} AND at.client_id = $6`;
-  const params = [...atParams(tenantId, f), clientId];
+  const rows = await attendanceRows(db, tenantId, { from, to, groupBy: 'week' }, clientId);
 
-  const attendances = await db.query(
-    `SELECT at.id, at.scanned_at, ${localDay()}::text AS day, a.id AS academy_id, a.name AS academy_name, s.name AS site_name,
-            b.title AS booking_title, pl.name AS plan_name
-       FROM attendances at JOIN academies a ON a.id = at.academy_id JOIN sites s ON s.id = at.site_id
-       LEFT JOIN bookings b ON b.id = at.booking_id LEFT JOIN memberships m ON m.id = at.membership_id LEFT JOIN plans pl ON pl.id = m.plan_id
-      WHERE ${where} ORDER BY at.scanned_at DESC`,
-    params,
-  );
-  const grouped = (g: 'week' | 'month') => db.query(
-    `SELECT ${period(g)} AS period, a.name AS academy_name, count(*)::int AS visits, count(DISTINCT ${localDay()})::int AS days
-       FROM attendances at JOIN academies a ON a.id = at.academy_id
-      WHERE ${where} GROUP BY 1, 2 ORDER BY 1 DESC, 2`,
-    params,
-  );
-  const totalsBy = (g: 'week' | 'month') => db.query(
-    `SELECT ${period(g)} AS period, count(*)::int AS visits, count(DISTINCT ${localDay()})::int AS days
-       FROM attendances at WHERE ${where} GROUP BY 1 ORDER BY 1 DESC`,
-    params,
-  );
-  const byAcademy = await db.query(
-    `SELECT a.id, a.name, count(*)::int AS visits, count(DISTINCT ${localDay()})::int AS days
-       FROM attendances at JOIN academies a ON a.id = at.academy_id WHERE ${where} GROUP BY 1, 2 ORDER BY 2`,
-    params,
-  );
+  const grouped = (g: G) => {
+    const totals = [...groupBy(rows, (r) => periodStart(new Date(r.scanned_at), g))].map(([period, list]) => ({ period, visits: list.length, days: distinct(list, dayOf) }));
+    const byAcademy = [...groupBy(rows, (r) => `${periodStart(new Date(r.scanned_at), g)}|${r.academy_name}`)].map(([k, list]) => {
+      const [period, academy_name] = k.split('|');
+      return { period, academy_name, visits: list.length, days: distinct(list, dayOf) };
+    });
+    return { totals: totals.sort(byPeriodDesc), byAcademy: byAcademy.sort((a, b) => byPeriodDesc(a, b) || a.academy_name.localeCompare(b.academy_name)) };
+  };
+
   const memberships = await membershipsOf(db, [clientId]);
   const current = memberships.filter((m) => m.is_current);
+  const days = [...new Set(rows.map(dayOf))];
   return {
     generatedAt: new Date().toISOString(),
     from, to,
     client: { id: client.id, fullName: client.full_name, document: client.document, email: client.email, organization: client.tenant_name },
     memberships,
     totals: {
-      visits: attendances.length,
-      days: new Set(attendances.map((a) => a.day)).size,
+      visits: rows.length,
+      days: days.length,
       unitsUsed: current.reduce((s, m) => s + m.units_used, 0),
       unitsRemaining: current.some((m) => m.remaining == null) ? null : current.reduce((s, m) => s + (m.remaining ?? 0), 0),
     },
-    byAcademy,
-    weekly: { totals: await totalsBy('week'), byAcademy: await grouped('week') },
-    monthly: { totals: await totalsBy('month'), byAcademy: await grouped('month') },
-    days: [...new Set(attendances.map((a) => a.day))],
-    attendances,
+    byAcademy: [...groupBy(rows, (r) => String(r.academy_id))]
+      .map(([aid, list]) => ({ id: Number(aid), name: list[0].academy_name, visits: list.length, days: distinct(list, dayOf) }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    weekly: grouped('week'),
+    monthly: grouped('month'),
+    days,
+    attendances: rows.map((r) => ({
+      id: r.id, scanned_at: r.scanned_at, day: dayOf(r), academy_id: r.academy_id, academy_name: r.academy_name,
+      site_name: r.site_name, booking_title: r.booking_title, plan_name: r.plan_name,
+    })),
   };
 }
 
 async function attendanceReport(db: Db, tenantId: number, f: Filters) {
-  const params = atParams(tenantId, f);
-  const periods = await db.query(
-    `SELECT ${period(f.groupBy)} AS period, count(*)::int AS visits, count(DISTINCT at.client_id)::int AS clients,
-            count(*) FILTER (WHERE at.over_capacity)::int AS over_capacity
-       FROM attendances at WHERE ${AT_WHERE} GROUP BY 1 ORDER BY 1 DESC`,
-    params,
-  );
-  const byClient = await db.query(
-    `SELECT u.id, u.full_name, count(*)::int AS visits, count(DISTINCT ${localDay()})::int AS days, max(at.scanned_at) AS last
-       FROM attendances at JOIN users u ON u.id = at.client_id WHERE ${AT_WHERE} GROUP BY 1, 2 ORDER BY visits DESC, 2`,
-    params,
-  );
-  const bySite = await db.query(
-    `SELECT s.id, s.name, a.name AS academy_name, count(*)::int AS visits, count(DISTINCT at.client_id)::int AS clients
-       FROM attendances at JOIN sites s ON s.id = at.site_id JOIN academies a ON a.id = s.academy_id WHERE ${AT_WHERE} GROUP BY 1, 2, 3 ORDER BY 3, 2`,
-    params,
-  );
-  const byClass = await db.query(
-    `SELECT coalesce(b.title, 'Ingreso general') AS name, count(*)::int AS visits
-       FROM attendances at LEFT JOIN bookings b ON b.id = at.booking_id WHERE ${AT_WHERE} GROUP BY 1 ORDER BY 2 DESC LIMIT 20`,
-    params,
-  );
-  return { from: f.from, to: f.to, groupBy: f.groupBy, periods, byClient, bySite, byClass, totals: { visits: periods.reduce((s, p) => s + p.visits, 0), clients: byClient.length } };
+  const rows = await attendanceRows(db, tenantId, f);
+  const periods = [...groupBy(rows, (r) => periodStart(new Date(r.scanned_at), f.groupBy))]
+    .map(([period, list]) => ({ period, visits: list.length, clients: distinct(list, (r) => r.client_id), over_capacity: list.filter((r) => r.over_capacity).length }))
+    .sort(byPeriodDesc);
+  const byClient = [...groupBy(rows, (r) => String(r.client_id))]
+    .map(([cid, list]) => ({ id: Number(cid), full_name: list[0].client_name, visits: list.length, days: distinct(list, dayOf), last: list[0].scanned_at }))
+    .sort((a, b) => b.visits - a.visits || a.full_name.localeCompare(b.full_name));
+  const bySite = [...groupBy(rows, (r) => String(r.site_id))]
+    .map(([sid, list]) => ({ id: Number(sid), name: list[0].site_name, academy_name: list[0].academy_name, visits: list.length, clients: distinct(list, (r) => r.client_id) }))
+    .sort((a, b) => a.academy_name.localeCompare(b.academy_name) || a.name.localeCompare(b.name));
+  const byClass = [...groupBy(rows, (r) => r.booking_title ?? 'Ingreso general')]
+    .map(([name, list]) => ({ name, visits: list.length }))
+    .sort((a, b) => b.visits - a.visits)
+    .slice(0, 20);
+  return { from: f.from, to: f.to, groupBy: f.groupBy, periods, byClient, bySite, byClass, totals: { visits: rows.length, clients: byClient.length } };
 }
 
 /** Aforo: cupos ofrecidos (reservas) frente a asistentes reales que escanearon su QR (RQ21) */
 async function capacityReport(db: Db, tenantId: number, f: Filters) {
-  const params = [tenantId, f.from, f.to, f.academyId ?? null, f.siteId ?? null];
-  const bWhere = `b.tenant_id = $1 AND b.status = 'confirmed'
-    AND b.starts_at >= ($2::date::timestamp AT TIME ZONE '${TZQ}') AND b.starts_at < (($3::date + 1)::timestamp AT TIME ZONE '${TZQ}')
-    AND ($4::int IS NULL OR s.academy_id = $4) AND ($5::int IS NULL OR b.site_id = $5)`;
-  const bySpace = await db.query(
-    `SELECT sp.id, sp.name, s.name AS site_name, sp.max_capacity, sp.allow_multi_group, sp.max_groups, sp.capacity_per_group,
-            count(b.id)::int AS bookings, coalesce(sum(b.group_size), 0)::int AS spots,
-            coalesce(sum((SELECT count(*) FROM attendances at WHERE at.booking_id = b.id)), 0)::int AS attendees,
-            coalesce(sum((SELECT count(*) FROM attendances at WHERE at.booking_id = b.id AND at.over_capacity)), 0)::int AS over_capacity
+  const [start, end] = dayBounds(f.from, f.to);
+  const sessions: any[] = await db.query(
+    `SELECT b.id, b.title, b.kind, b.starts_at, b.ends_at, b.group_size, b.space_id,
+            sp.name AS space_name, sp.max_capacity, sp.allow_multi_group, sp.max_groups, sp.capacity_per_group, s.name AS site_name,
+            (SELECT count(*) FROM attendances att WHERE att.booking_id = b.id) AS attendees,
+            (SELECT count(*) FROM attendances att WHERE att.booking_id = b.id AND att.over_capacity = true) AS over_capacity
        FROM bookings b JOIN spaces sp ON sp.id = b.space_id JOIN sites s ON s.id = b.site_id
-      WHERE ${bWhere} GROUP BY sp.id, sp.name, s.name ORDER BY s.name, sp.name`,
-    params,
+      WHERE b.tenant_id = $1 AND b.status = 'confirmed' AND b.starts_at >= $2 AND b.starts_at < $3
+        AND ($4::int IS NULL OR s.academy_id = $4) AND ($5::int IS NULL OR b.site_id = $5)
+      ORDER BY b.starts_at DESC`,
+    [tenantId, start, end, f.academyId ?? null, f.siteId ?? null],
   );
-  const periods = await db.query(
-    `SELECT ${period(f.groupBy, 'b.starts_at')} AS period, sp.name AS space_name, s.name AS site_name,
-            count(b.id)::int AS bookings, sum(b.group_size)::int AS spots,
-            coalesce(sum((SELECT count(*) FROM attendances at WHERE at.booking_id = b.id)), 0)::int AS attendees
-       FROM bookings b JOIN spaces sp ON sp.id = b.space_id JOIN sites s ON s.id = b.site_id
-      WHERE ${bWhere} GROUP BY 1, 2, 3 ORDER BY 1 DESC, 3, 2`,
-    params,
-  );
-  const sessions = await db.query(
-    `SELECT b.id, b.title, b.kind, b.starts_at, b.ends_at, b.group_size, sp.name AS space_name, s.name AS site_name,
-            (SELECT count(*)::int FROM attendances at WHERE at.booking_id = b.id) AS attendees
-       FROM bookings b JOIN spaces sp ON sp.id = b.space_id JOIN sites s ON s.id = b.site_id
-      WHERE ${bWhere} ORDER BY b.starts_at DESC LIMIT 200`,
-    params,
-  );
-  const pct = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 1000) / 10 : 0);
+  for (const r of sessions) {
+    r.attendees = Number(r.attendees);
+    r.over_capacity = Number(r.over_capacity);
+  }
+  const sum = (list: any[], k: string) => list.reduce((s, r) => s + r[k], 0);
+  const bySpace = [...groupBy(sessions, (r) => String(r.space_id))]
+    .map(([sid, list]) => {
+      const x = list[0];
+      const spots = sum(list, 'group_size');
+      const attendees = sum(list, 'attendees');
+      return {
+        id: Number(sid), name: x.space_name, site_name: x.site_name, max_capacity: x.max_capacity, allow_multi_group: x.allow_multi_group,
+        max_groups: x.max_groups, capacity_per_group: x.capacity_per_group, bookings: list.length, spots, attendees,
+        over_capacity: sum(list, 'over_capacity'), occupancy: pct(attendees, spots),
+      };
+    })
+    .sort((a, b) => a.site_name.localeCompare(b.site_name) || a.name.localeCompare(b.name));
+  const periods = [...groupBy(sessions, (r) => `${periodStart(new Date(r.starts_at), f.groupBy)}|${r.space_id}`)]
+    .map(([k, list]) => {
+      const spots = sum(list, 'group_size');
+      const attendees = sum(list, 'attendees');
+      return { period: k.split('|')[0], space_name: list[0].space_name, site_name: list[0].site_name, bookings: list.length, spots, attendees, occupancy: pct(attendees, spots) };
+    })
+    .sort((a, b) => byPeriodDesc(a, b) || a.site_name.localeCompare(b.site_name) || a.space_name.localeCompare(b.space_name));
   return {
     from: f.from, to: f.to, groupBy: f.groupBy,
-    bySpace: bySpace.map((r) => ({ ...r, occupancy: pct(r.attendees, r.spots) })),
-    periods: periods.map((r) => ({ ...r, occupancy: pct(r.attendees, r.spots) })),
-    sessions: sessions.map((r) => ({ ...r, occupancy: pct(r.attendees, r.group_size), full: r.attendees >= r.group_size })),
+    bySpace,
+    periods,
+    sessions: sessions.slice(0, 200).map((r) => ({
+      id: r.id, title: r.title, kind: r.kind, starts_at: r.starts_at, ends_at: r.ends_at, group_size: r.group_size,
+      space_name: r.space_name, site_name: r.site_name, attendees: r.attendees,
+      occupancy: pct(r.attendees, r.group_size), full: r.attendees >= r.group_size,
+    })),
   };
 }
 
 async function paymentsReport(db: Db, tenantId: number, f: Filters) {
-  const params = [tenantId, f.from, f.to, f.academyId ?? null, f.siteId ?? null];
-  const base = `FROM payments pay
-      LEFT JOIN memberships m ON m.id = pay.membership_id LEFT JOIN plans pl ON pl.id = m.plan_id
-      LEFT JOIN bookings b ON b.id = pay.booking_id LEFT JOIN sites bs ON bs.id = b.site_id
-     WHERE pay.tenant_id = $1
-       AND pay.paid_at >= ($2::date::timestamp AT TIME ZONE '${TZQ}') AND pay.paid_at < (($3::date + 1)::timestamp AT TIME ZONE '${TZQ}')
-       AND ($4::int IS NULL OR bs.academy_id = $4 OR EXISTS (SELECT 1 FROM plan_academies pa WHERE pa.plan_id = m.plan_id AND pa.academy_id = $4))
-       AND ($5::int IS NULL OR b.site_id = $5 OR (m.id IS NOT NULL AND (pl.all_sites OR EXISTS (SELECT 1 FROM plan_sites ps WHERE ps.plan_id = m.plan_id AND ps.site_id = $5))))`;
-  const periods = await db.query(`SELECT ${period(f.groupBy, 'pay.paid_at')} AS period, sum(pay.amount)::float8 AS total, count(*)::int AS payments ${base} GROUP BY 1 ORDER BY 1 DESC`, params);
-  const byMethod = await db.query(`SELECT pay.method, sum(pay.amount)::float8 AS total, count(*)::int AS payments ${base} GROUP BY 1 ORDER BY 2 DESC`, params);
-  const byConcept = await db.query(
-    `SELECT CASE WHEN pay.membership_id IS NOT NULL THEN 'Plan: ' || pl.name ELSE 'Reservas de espacios' END AS concept,
-            sum(pay.amount)::float8 AS total, count(*)::int AS payments ${base} GROUP BY 1 ORDER BY 2 DESC`,
-    params,
+  const [start, end] = dayBounds(f.from, f.to);
+  const rows: any[] = await db.query(
+    `SELECT pay.amount, pay.method, pay.paid_at, pay.membership_id, pl.name AS plan_name
+       FROM payments pay
+       LEFT JOIN memberships m ON m.id = pay.membership_id LEFT JOIN plans pl ON pl.id = m.plan_id
+       LEFT JOIN bookings b ON b.id = pay.booking_id LEFT JOIN sites bs ON bs.id = b.site_id
+      WHERE pay.tenant_id = $1 AND pay.paid_at >= $2 AND pay.paid_at < $3
+        AND ($4::int IS NULL OR bs.academy_id = $4 OR EXISTS (SELECT 1 FROM plan_academies pa WHERE pa.plan_id = m.plan_id AND pa.academy_id = $4))
+        AND ($5::int IS NULL OR b.site_id = $5 OR (m.id IS NOT NULL AND (pl.all_sites = true OR EXISTS (SELECT 1 FROM plan_sites ps WHERE ps.plan_id = m.plan_id AND ps.site_id = $5))))`,
+    [tenantId, start, end, f.academyId ?? null, f.siteId ?? null],
   );
-  return { from: f.from, to: f.to, groupBy: f.groupBy, periods, byMethod, byConcept, total: byMethod.reduce((s, m) => s + m.total, 0) };
+  for (const r of rows) r.amount = Number(r.amount);
+  const totals = (key: (r: any) => string) =>
+    [...groupBy(rows, key)].map(([k, list]) => ({ k, total: list.reduce((s, r) => s + r.amount, 0), payments: list.length })).sort((a, b) => b.total - a.total);
+  return {
+    from: f.from, to: f.to, groupBy: f.groupBy,
+    periods: totals((r) => periodStart(new Date(r.paid_at), f.groupBy)).map(({ k, ...x }) => ({ period: k, ...x })).sort(byPeriodDesc),
+    byMethod: totals((r) => r.method).map(({ k, ...x }) => ({ method: k, ...x })),
+    byConcept: totals((r) => (r.membership_id ? `Plan: ${r.plan_name}` : 'Reservas de espacios')).map(({ k, ...x }) => ({ concept: k, ...x })),
+    total: rows.reduce((s, r) => s + r.amount, 0),
+  };
 }
 
 export function reportRoutes(db: Db) {
@@ -208,26 +233,27 @@ export function reportRoutes(db: Db) {
     const f = readFilters(req.query);
     const t = req.user.tenantId;
     const today = todayLocal();
+    const in7 = addDays(today, 7);
     const [kpi] = await db.query(
       `SELECT
-         (SELECT count(*)::int FROM users WHERE tenant_id = $1 AND role = 'client' AND active) AS clients,
-         (SELECT count(*)::int FROM memberships WHERE tenant_id = $1 AND status = 'active' AND starts_on <= $2::date AND ends_on >= $2::date
+         (SELECT count(*) FROM users WHERE tenant_id = $1 AND role = 'client' AND active = true) AS clients,
+         (SELECT count(*) FROM memberships WHERE tenant_id = $1 AND status = 'active' AND starts_on <= $2::date AND ends_on >= $2::date
              AND (units_total IS NULL OR units_used < units_total)) AS active_memberships,
-         (SELECT count(*)::int FROM memberships WHERE tenant_id = $1 AND status = 'active' AND ends_on BETWEEN $2::date AND $3::date) AS expiring_soon,
-         (SELECT count(*)::int FROM academies WHERE tenant_id = $1) AS academies,
-         (SELECT count(*)::int FROM sites WHERE tenant_id = $1) AS sites`,
-      [t, today, addDays(today, 7)],
+         (SELECT count(*) FROM memberships WHERE tenant_id = $1 AND status = 'active' AND ends_on >= $2::date AND ends_on <= $3::date) AS expiring_soon,
+         (SELECT count(*) FROM academies WHERE tenant_id = $1) AS academies,
+         (SELECT count(*) FROM sites WHERE tenant_id = $1) AS sites`,
+      [t, today, in7],
     );
     const expiring = await db.query(
       `SELECT m.id, u.id AS client_id, u.full_name, pl.name AS plan_name, m.ends_on, m.units_total, m.units_used
          FROM memberships m JOIN users u ON u.id = m.client_id JOIN plans pl ON pl.id = m.plan_id
-        WHERE m.tenant_id = $1 AND m.status = 'active' AND m.ends_on BETWEEN $2::date AND $3::date ORDER BY m.ends_on LIMIT 50`,
-      [t, today, addDays(today, 7)],
+        WHERE m.tenant_id = $1 AND m.status = 'active' AND m.ends_on >= $2::date AND m.ends_on <= $3::date ORDER BY m.ends_on LIMIT 50`,
+      [t, today, in7],
     );
     const canCapacity = req.user.permissions.includes('capacity_reports');
     res.json({
       from: f.from, to: f.to, groupBy: f.groupBy,
-      kpi,
+      kpi: Object.fromEntries(Object.entries(kpi).map(([k, v]) => [k, Number(v)])),
       expiring,
       attendance: await attendanceReport(db, t, f),
       capacity: canCapacity ? await capacityReport(db, t, f) : null,

@@ -1,9 +1,9 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { router } from 'expo-router';
-import React, { useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import React, { useCallback, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, Field, colors, errorText } from '../components/ui';
-import { getApiUrl, post } from '../lib/api';
+import { getApiUrl, getServerMode, post } from '../lib/api';
 import { useSession } from '../session';
 import type { Profile } from '../types';
 
@@ -13,6 +13,9 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [server, setServerLabel] = useState('');
+  const MODE = { cloud: 'Nube', local: 'Local', custom: 'Servidor' } as const;
+  useFocusEffect(useCallback(() => setServerLabel(getApiUrl() ? `${MODE[getServerMode()]} · ${getApiUrl()}` : 'Configurar servidor'), [])); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submit = async () => {
     setError(null);
@@ -50,7 +53,7 @@ export default function Login() {
         </View>
         <Pressable onPress={() => router.push('/server')} style={s.server}>
           <Ionicons name="cloud-outline" size={15} color="#CCFBF1" />
-          <Text style={{ color: '#CCFBF1', fontSize: 12 }}>{getApiUrl() || 'Configurar servidor'}</Text>
+          <Text style={{ color: '#CCFBF1', fontSize: 12 }}>{server}</Text>
         </Pressable>
       </ScrollView>
     </KeyboardAvoidingView>

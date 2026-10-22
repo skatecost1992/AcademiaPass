@@ -27,9 +27,9 @@ Notas:
 
 - **Web**: la misma URL de Render (`https://academiapass.onrender.com`). En el celular se puede agregar a la
   pantalla de inicio.
-- **Android / iOS**: en la pantalla de ingreso toca *Configurar servidor* y escribe la URL. Para que el APK
-  venga ya configurado, pon la URL en `app-android/app.json` → `expo.extra.apiUrl` (y en `app-ios/app.json`)
-  antes de compilar.
+- **Android / iOS**: `expo.extra.apiUrlCloud` (nube) y `apiUrlLocal` (PC local) en cada `app.json`. En el
+  teléfono, el usuario de configuración `admin` elige entre ellas. Detalle en
+  [`SERVIDORES_Y_BASE_LOCAL.md`](SERVIDORES_Y_BASE_LOCAL.md).
 
 ## 3. APK de Android (Windows)
 

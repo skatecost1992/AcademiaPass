@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { HttpError, requireAdmin, requirePerm, verifyQr } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { KINDS_FOR_CONTEXT, coversPlace, membershipsOf, type MembershipView } from '../lib/memberships.ts';
-import { TZ, dateStr, id, optId, own, parse, range } from '../lib/util.ts';
+import { dateStr, dayBounds, id, optId, own, parse, range } from '../lib/util.ts';
 
 const KIND_LABEL = { classes: 'clases', reservations: 'reservas', access: 'acceso', mixed: 'mixto' };
 
@@ -96,7 +96,7 @@ export function attendanceRoutes(db: Db) {
       const [{ n }] = await db.query(`SELECT count(*)::int AS n FROM attendances WHERE booking_id = $1`, [booking.id]);
       const [space] = await db.query(`SELECT name, max_capacity FROM spaces WHERE id = $1`, [booking.space_id]);
       const [{ inSpace }] = await db.query(
-        `SELECT count(*)::int AS "inSpace" FROM attendances at JOIN bookings ob ON ob.id = at.booking_id
+        `SELECT count(*)::int AS "inSpace" FROM attendances att JOIN bookings ob ON ob.id = att.booking_id
           WHERE ob.space_id = $1 AND ob.status = 'confirmed' AND ob.starts_at < $3 AND ob.ends_at > $2`,
         [booking.space_id, booking.starts_at, booking.ends_at],
       );
@@ -143,21 +143,22 @@ export function attendanceRoutes(db: Db) {
   r.get('/attendance', requirePerm('attendance', 'reports'), async (req, res) => {
     const q = parse(z.object({ from: dateStr.optional(), to: dateStr.optional(), academyId: optId, siteId: optId, clientId: optId, bookingId: optId }), req.query);
     const { from, to } = range(q);
+    const [start, end] = dayBounds(from, to);
     res.json(await db.query(
-      `SELECT at.id, at.scanned_at, at.method, at.over_capacity, at.client_id, u.full_name AS client_name,
+      `SELECT att.id, att.scanned_at, att.method, att.over_capacity, att.client_id, u.full_name AS client_name,
               a.name AS academy_name, s.name AS site_name, b.title AS booking_title, sp.name AS space_name,
               pl.name AS plan_name, st.full_name AS scanned_by_name
-         FROM attendances at
-         JOIN users u ON u.id = at.client_id JOIN academies a ON a.id = at.academy_id JOIN sites s ON s.id = at.site_id
-         LEFT JOIN bookings b ON b.id = at.booking_id LEFT JOIN spaces sp ON sp.id = at.space_id
-         LEFT JOIN memberships m ON m.id = at.membership_id LEFT JOIN plans pl ON pl.id = m.plan_id
-         LEFT JOIN users st ON st.id = at.scanned_by
-        WHERE at.tenant_id = $1
-          AND at.scanned_at >= ($2::date::timestamp AT TIME ZONE $4) AND at.scanned_at < (($3::date + 1)::timestamp AT TIME ZONE $4)
-          AND ($5::int IS NULL OR at.academy_id = $5) AND ($6::int IS NULL OR at.site_id = $6)
-          AND ($7::int IS NULL OR at.client_id = $7) AND ($8::int IS NULL OR at.booking_id = $8)
-        ORDER BY at.scanned_at DESC LIMIT 1000`,
-      [req.user.tenantId, from, to, TZ, q.academyId ?? null, q.siteId ?? null, q.clientId ?? null, q.bookingId ?? null],
+         FROM attendances att
+         JOIN users u ON u.id = att.client_id JOIN academies a ON a.id = att.academy_id JOIN sites s ON s.id = att.site_id
+         LEFT JOIN bookings b ON b.id = att.booking_id LEFT JOIN spaces sp ON sp.id = att.space_id
+         LEFT JOIN memberships m ON m.id = att.membership_id LEFT JOIN plans pl ON pl.id = m.plan_id
+         LEFT JOIN users st ON st.id = att.scanned_by
+        WHERE att.tenant_id = $1
+          AND att.scanned_at >= $2 AND att.scanned_at < $3
+          AND ($4::int IS NULL OR att.academy_id = $4) AND ($5::int IS NULL OR att.site_id = $5)
+          AND ($6::int IS NULL OR att.client_id = $6) AND ($7::int IS NULL OR att.booking_id = $7)
+        ORDER BY att.scanned_at DESC LIMIT 1000`,
+      [req.user.tenantId, start, end, q.academyId ?? null, q.siteId ?? null, q.clientId ?? null, q.bookingId ?? null],
     ));
   });
 

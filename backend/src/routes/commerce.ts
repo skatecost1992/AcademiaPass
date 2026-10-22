@@ -6,9 +6,9 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { ALL_PERMISSIONS, HttpError, hashPassword, requireAdmin, requirePerm } from '../auth.ts';
 import type { Db } from '../db.ts';
-import { membershipsOf } from '../lib/memberships.ts';
-import { TZ, addDays, dateStr, id, isoDateTime, optId, optText, own, ownAll, parse, range, text, todayLocal } from '../lib/util.ts';
-import { assertNoAccountInTenant, assertUsernameFree, upsertPerson } from './auth.ts';
+import { membershipsOf, planPlaces } from '../lib/memberships.ts';
+import { addDays, dateStr, dayBounds, id, idList, isoDateTime, optId, optText, own, ownAll, parse, range, text, todayLocal } from '../lib/util.ts';
+import { assertNoAccountInTenant, assertUsernameFree, linkClientAcademies, upsertPerson } from './auth.ts';
 
 const username = z.string().trim().toLowerCase().regex(/^[a-z0-9._-]{4,40}$/, 'Usa 4 a 40 letras, números, punto, guion o guion bajo');
 const password = z.string().min(8, 'Mínimo 8 caracteres').max(100);
@@ -36,15 +36,15 @@ export function commerceRoutes(db: Db) {
     active: z.boolean().default(true),
   }).refine((p) => p.allSites || p.siteIds.length > 0, { message: 'Selecciona las sedes o marca "todas las sedes"', path: ['siteIds'] });
 
-  const planSelect = `
-    SELECT p.*, p.price::float8 AS price,
-           coalesce((SELECT json_agg(json_build_object('id', a.id, 'name', a.name) ORDER BY a.name) FROM plan_academies pa JOIN academies a ON a.id = pa.academy_id WHERE pa.plan_id = p.id), '[]') AS academies,
-           coalesce((SELECT json_agg(json_build_object('id', s.id, 'name', s.name) ORDER BY s.name) FROM plan_sites ps JOIN sites s ON s.id = ps.site_id WHERE ps.plan_id = p.id), '[]') AS sites
-      FROM plans p`;
+  /** Planes con sus academias y sedes permitidas */
+  const loadPlans = async (where: string, params: unknown[]) => {
+    const rows = await db.query(`SELECT * FROM plans p WHERE ${where} ORDER BY p.active DESC, p.name`, params);
+    const places = await planPlaces(db, rows.map((p) => p.id));
+    return rows.map((p) => ({ ...p, price: Number(p.price), ...places.get(p.id)! }));
+  };
 
   r.get('/plans', async (req, res) => {
-    const rows = await db.query(`${planSelect} WHERE p.tenant_id = $1 AND ($2 OR p.active) ORDER BY p.active DESC, p.name`, [req.user.tenantId, req.user.role !== 'client']);
-    res.json(rows);
+    res.json(await loadPlans(`p.tenant_id = $1 AND ($2 = true OR p.active = true)`, [req.user.tenantId, req.user.role !== 'client']));
   });
 
   const savePlan = async (tenantId: number, b: z.infer<typeof planBody>, planId?: number) => {
@@ -52,7 +52,7 @@ export function commerceRoutes(db: Db) {
     const siteIds = b.allSites ? [] : b.siteIds;
     if (siteIds.length) {
       await ownAll(db, 'sites', siteIds, tenantId);
-      const bad = await db.query(`SELECT name FROM sites WHERE id = ANY($1::int[]) AND NOT (academy_id = ANY($2::int[]))`, [siteIds, b.academyIds]);
+      const bad = await db.query(`SELECT name FROM sites WHERE id IN ${idList(siteIds)} AND academy_id NOT IN ${idList(b.academyIds)}`);
       if (bad.length) throw new HttpError(400, `La sede ${bad[0].name} no pertenece a las academias del plan`);
     }
     return db.tx(async (q) => {
@@ -62,11 +62,10 @@ export function commerceRoutes(db: Db) {
         : await q.query(`INSERT INTO plans (tenant_id, name, description, kind, units, validity_days, price, all_sites, active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`, [tenantId, ...params]);
       await q.query(`DELETE FROM plan_academies WHERE plan_id = $1`, [p.id]);
       await q.query(`DELETE FROM plan_sites WHERE plan_id = $1`, [p.id]);
-      await q.query(`INSERT INTO plan_academies (plan_id, academy_id) SELECT $1, unnest($2::int[])`, [p.id, b.academyIds]);
-      if (siteIds.length) await q.query(`INSERT INTO plan_sites (plan_id, site_id) SELECT $1, unnest($2::int[])`, [p.id, siteIds]);
-      const [row] = await q.query(`${planSelect} WHERE p.id = $1`, [p.id]);
-      return row;
-    });
+      for (const aid of new Set(b.academyIds)) await q.query(`INSERT INTO plan_academies (plan_id, academy_id) VALUES ($1, $2)`, [p.id, aid]);
+      for (const sid of new Set(siteIds)) await q.query(`INSERT INTO plan_sites (plan_id, site_id) VALUES ($1, $2)`, [p.id, sid]);
+      return p.id as number;
+    }).then(async (pid) => (await loadPlans(`p.id = $1`, [pid]))[0]);
   };
 
   r.post('/plans', requirePerm('plans'), async (req, res) => {
@@ -86,17 +85,20 @@ export function commerceRoutes(db: Db) {
     const rows = await db.query(
       `SELECT u.id, u.username, u.full_name, u.email, u.phone, u.active, u.consent_at, u.home_site_id, p.document,
               hs.name AS home_site_name,
-              coalesce((SELECT json_agg(json_build_object('id', a.id, 'name', a.name) ORDER BY a.name) FROM client_academies ca JOIN academies a ON a.id = ca.academy_id WHERE ca.client_id = u.id), '[]') AS academies,
-              (SELECT max(scanned_at) FROM attendances at WHERE at.client_id = u.id) AS last_attendance
+              (SELECT max(scanned_at) FROM attendances att WHERE att.client_id = u.id) AS last_attendance
          FROM users u JOIN persons p ON p.id = u.person_id LEFT JOIN sites hs ON hs.id = u.home_site_id
         WHERE u.tenant_id = $1 AND u.role = 'client'
-          AND ($2::text IS NULL OR u.full_name ILIKE '%' || $2 || '%' OR p.document ILIKE $2 || '%' OR u.username ILIKE $2 || '%')
+          AND ($2::text IS NULL OR lower(u.full_name) LIKE lower(CONCAT('%', $2::text, '%')) OR lower(p.document) LIKE lower(CONCAT($2::text, '%'))
+               OR u.username LIKE lower(CONCAT($2::text, '%')))
           AND ($3::int IS NULL OR EXISTS (SELECT 1 FROM client_academies ca WHERE ca.client_id = u.id AND ca.academy_id = $3))
-          AND ($4::int IS NULL OR u.home_site_id = $4 OR EXISTS (SELECT 1 FROM attendances at WHERE at.client_id = u.id AND at.site_id = $4))
+          AND ($4::int IS NULL OR u.home_site_id = $4 OR EXISTS (SELECT 1 FROM attendances att WHERE att.client_id = u.id AND att.site_id = $4))
         ORDER BY u.full_name LIMIT 500`,
       [req.user.tenantId, q.q || null, q.academyId ?? null, q.siteId ?? null],
     );
-    res.json(rows);
+    const links = rows.length
+      ? await db.query(`SELECT ca.client_id, a.id, a.name FROM client_academies ca JOIN academies a ON a.id = ca.academy_id WHERE ca.client_id IN ${idList(rows.map((r) => r.id))} ORDER BY a.name`)
+      : [];
+    res.json(rows.map((c) => ({ ...c, academies: links.filter((l) => l.client_id === c.id).map((l) => ({ id: l.id, name: l.name })) })));
   });
 
   r.get('/clients/:id', clientsRead, async (req, res) => {
@@ -109,18 +111,18 @@ export function commerceRoutes(db: Db) {
     );
     const academies = await db.query(`SELECT a.id, a.name FROM client_academies ca JOIN academies a ON a.id = ca.academy_id WHERE ca.client_id = $1 ORDER BY a.name`, [c.id]);
     const payments = await db.query(
-      `SELECT pay.id, pay.amount::float8, pay.method, pay.reference, pay.paid_at, pay.membership_id, pay.booking_id, coalesce(pl.name, b.title) AS concept
+      `SELECT pay.id, pay.amount, pay.method, pay.reference, pay.paid_at, pay.membership_id, pay.booking_id, coalesce(pl.name, b.title) AS concept
          FROM payments pay LEFT JOIN memberships m ON m.id = pay.membership_id LEFT JOIN plans pl ON pl.id = m.plan_id LEFT JOIN bookings b ON b.id = pay.booking_id
         WHERE pay.client_id = $1 ORDER BY pay.paid_at DESC LIMIT 100`,
       [c.id],
     );
     const attendances = await db.query(
-      `SELECT at.id, at.scanned_at, at.over_capacity, a.name AS academy_name, s.name AS site_name, b.title AS booking_title
-         FROM attendances at JOIN academies a ON a.id = at.academy_id JOIN sites s ON s.id = at.site_id LEFT JOIN bookings b ON b.id = at.booking_id
-        WHERE at.client_id = $1 ORDER BY at.scanned_at DESC LIMIT 50`,
+      `SELECT att.id, att.scanned_at, att.over_capacity, a.name AS academy_name, s.name AS site_name, b.title AS booking_title
+         FROM attendances att JOIN academies a ON a.id = att.academy_id JOIN sites s ON s.id = att.site_id LEFT JOIN bookings b ON b.id = att.booking_id
+        WHERE att.client_id = $1 ORDER BY att.scanned_at DESC LIMIT 50`,
       [c.id],
     );
-    res.json({ ...info, academies, memberships: await membershipsOf(db, [c.id]), payments, attendances });
+    res.json({ ...info, academies, memberships: await membershipsOf(db, [c.id]), payments: payments.map((p) => ({ ...p, amount: Number(p.amount) })), attendances });
   });
 
   const clientBody = z.object({
@@ -142,7 +144,7 @@ export function commerceRoutes(db: Db) {
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'client', $8) RETURNING id`,
         [req.user.tenantId, personId, b.username, await hashPassword(b.password), b.fullName, b.email ?? null, b.phone, b.homeSiteId ?? null],
       );
-      await q.query(`INSERT INTO client_academies (client_id, academy_id) SELECT $1, unnest($2::int[])`, [u.id, b.academyIds]);
+      await linkClientAcademies(q, u.id, b.academyIds);
       return u.id;
     });
     res.status(201).json({ id: clientId });
@@ -157,8 +159,8 @@ export function commerceRoutes(db: Db) {
     await db.tx(async (q) => {
       await q.query(`UPDATE users SET full_name = $2, email = $3, phone = $4, home_site_id = $5, active = $6 WHERE id = $1`, [c.id, b.fullName, b.email ?? null, b.phone, b.homeSiteId ?? null, b.active]);
       if (b.password) await q.query(`UPDATE users SET password_hash = $2 WHERE id = $1`, [c.id, await hashPassword(b.password)]);
-      await q.query(`DELETE FROM client_academies WHERE client_id = $1 AND NOT (academy_id = ANY($2::int[]))`, [c.id, b.academyIds]);
-      await q.query(`INSERT INTO client_academies (client_id, academy_id) SELECT $1, unnest($2::int[]) ON CONFLICT DO NOTHING`, [c.id, b.academyIds]);
+      await q.query(`DELETE FROM client_academies WHERE client_id = $1 AND academy_id NOT IN ${idList(b.academyIds)}`, [c.id]);
+      await linkClientAcademies(q, c.id, b.academyIds);
     });
     res.json({ ok: true });
   });
@@ -177,11 +179,12 @@ export function commerceRoutes(db: Db) {
         [req.user.tenantId, c.id, plan.id, startsOn, addDays(startsOn, plan.validity_days - 1), plan.units, req.user.id],
       );
       // Al adquirir el plan el cliente queda asociado a todas sus academias (RQ13)
-      await q.query(`INSERT INTO client_academies (client_id, academy_id) SELECT $1, academy_id FROM plan_academies WHERE plan_id = $2 ON CONFLICT DO NOTHING`, [c.id, plan.id]);
+      const planAcademies = await q.query(`SELECT academy_id FROM plan_academies WHERE plan_id = $1`, [plan.id]);
+      await linkClientAcademies(q, c.id, planAcademies.map((x) => x.academy_id));
       if (b.payment) {
         await q.query(
-          `INSERT INTO payments (tenant_id, client_id, membership_id, amount, method, reference, notes, paid_at, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, coalesce($8::timestamptz, now()), $9)`,
-          [req.user.tenantId, c.id, m.id, b.payment.amount, b.payment.method, b.payment.reference, b.payment.notes, b.payment.paidAt ?? null, req.user.id],
+          `INSERT INTO payments (tenant_id, client_id, membership_id, amount, method, reference, notes, paid_at, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [req.user.tenantId, c.id, m.id, b.payment.amount, b.payment.method, b.payment.reference, b.payment.notes, b.payment.paidAt ? new Date(b.payment.paidAt) : new Date(), req.user.id],
         );
       }
       return m.id;
@@ -200,22 +203,23 @@ export function commerceRoutes(db: Db) {
   r.get('/payments', requirePerm('payments', 'reports'), async (req, res) => {
     const q = parse(z.object({ from: dateStr.optional(), to: dateStr.optional(), clientId: optId, academyId: optId, siteId: optId }), req.query);
     const { from, to } = range(q);
+    const [start, end] = dayBounds(from, to);
     res.json(await db.query(
-      `SELECT pay.id, pay.amount::float8, pay.method, pay.reference, pay.notes, pay.paid_at, pay.membership_id, pay.booking_id,
+      `SELECT pay.id, pay.amount, pay.method, pay.reference, pay.notes, pay.paid_at, pay.membership_id, pay.booking_id,
               coalesce(u.full_name, pay.payer_name) AS payer, pay.client_id,
-              CASE WHEN pay.membership_id IS NOT NULL THEN 'Plan: ' || pl.name ELSE 'Reserva: ' || b.title END AS concept
+              CASE WHEN pay.membership_id IS NOT NULL THEN CONCAT('Plan: ', pl.name) ELSE CONCAT('Reserva: ', b.title) END AS concept
          FROM payments pay
          LEFT JOIN users u ON u.id = pay.client_id
          LEFT JOIN memberships m ON m.id = pay.membership_id LEFT JOIN plans pl ON pl.id = m.plan_id
          LEFT JOIN bookings b ON b.id = pay.booking_id LEFT JOIN sites bs ON bs.id = b.site_id
         WHERE pay.tenant_id = $1
-          AND pay.paid_at >= ($2::date::timestamp AT TIME ZONE $4) AND pay.paid_at < (($3::date + 1)::timestamp AT TIME ZONE $4)
-          AND ($5::int IS NULL OR pay.client_id = $5)
-          AND ($6::int IS NULL OR bs.academy_id = $6 OR EXISTS (SELECT 1 FROM plan_academies pa WHERE pa.plan_id = m.plan_id AND pa.academy_id = $6))
-          AND ($7::int IS NULL OR b.site_id = $7 OR (m.id IS NOT NULL AND (pl.all_sites OR EXISTS (SELECT 1 FROM plan_sites ps WHERE ps.plan_id = m.plan_id AND ps.site_id = $7))))
+          AND pay.paid_at >= $2 AND pay.paid_at < $3
+          AND ($4::int IS NULL OR pay.client_id = $4)
+          AND ($5::int IS NULL OR bs.academy_id = $5 OR EXISTS (SELECT 1 FROM plan_academies pa WHERE pa.plan_id = m.plan_id AND pa.academy_id = $5))
+          AND ($6::int IS NULL OR b.site_id = $6 OR (m.id IS NOT NULL AND (pl.all_sites = true OR EXISTS (SELECT 1 FROM plan_sites ps WHERE ps.plan_id = m.plan_id AND ps.site_id = $6))))
         ORDER BY pay.paid_at DESC`,
-      [req.user.tenantId, from, to, TZ, q.clientId ?? null, q.academyId ?? null, q.siteId ?? null],
-    ));
+      [req.user.tenantId, start, end, q.clientId ?? null, q.academyId ?? null, q.siteId ?? null],
+    ).then((rows) => rows.map((p) => ({ ...p, amount: Number(p.amount) }))));
   });
 
   // Todo pago va ligado a un plan adquirido o a una reserva (RQ6)
@@ -232,10 +236,10 @@ export function commerceRoutes(db: Db) {
     }
     const [p] = await db.query(
       `INSERT INTO payments (tenant_id, client_id, payer_name, membership_id, booking_id, amount, method, reference, notes, paid_at, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, coalesce($10::timestamptz, now()), $11) RETURNING id, amount::float8, method, paid_at`,
-      [req.user.tenantId, clientId, b.payerName, b.membershipId ?? null, b.bookingId ?? null, b.amount, b.method, b.reference, b.notes, b.paidAt ?? null, req.user.id],
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id, amount, method, paid_at`,
+      [req.user.tenantId, clientId, b.payerName, b.membershipId ?? null, b.bookingId ?? null, b.amount, b.method, b.reference, b.notes, b.paidAt ? new Date(b.paidAt) : new Date(), req.user.id],
     );
-    res.status(201).json(p);
+    res.status(201).json({ ...p, amount: Number(p.amount) });
   });
 
   // ------------------------------------------------------------------ Personal (RQ17)

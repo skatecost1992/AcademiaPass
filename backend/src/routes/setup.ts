@@ -9,7 +9,8 @@ import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { HttpError, requireAdmin, requirePerm } from '../auth.ts';
 import type { Db } from '../db.ts';
-import { id, joinCode, optId, optText, own, parse, text, timeStr } from '../lib/util.ts';
+import { deleteAcademy, deleteSites, deleteSpaces } from '../lib/cleanup.ts';
+import { id, idList, joinCode, optId, optText, own, parse, text, timeStr } from '../lib/util.ts';
 
 /** Academias visibles para el usuario: todas las de su organizacion o, si es cliente, las suyas */
 export async function visibleAcademyIds(db: Db, req: Request): Promise<number[]> {
@@ -46,8 +47,7 @@ export function setupRoutes(db: Db) {
     const rows = await db.query(
       `SELECT a.id, a.name, a.description, a.active, ${req.user.role === 'client' ? 'NULL' : 'a.join_code'} AS join_code,
               (SELECT count(*)::int FROM sites s WHERE s.academy_id = a.id) AS sites
-         FROM academies a WHERE a.id = ANY($1::int[]) ORDER BY a.name`,
-      [ids],
+         FROM academies a WHERE a.id IN ${idList(ids)} ORDER BY a.name`,
     );
     res.json(rows);
   });
@@ -69,7 +69,7 @@ export function setupRoutes(db: Db) {
     const a = await own(db, 'academies', parse(id, req.params.id), req.user.tenantId, 'Academia');
     const [{ n }] = await db.query(`SELECT count(*)::int AS n FROM attendances WHERE academy_id = $1`, [a.id]);
     if (n > 0) throw new HttpError(409, 'La academia tiene asistencias registradas: desactívala en lugar de borrarla', 'IN_USE');
-    await db.query(`DELETE FROM academies WHERE id = $1`, [a.id]);
+    await db.tx((q) => deleteAcademy(q, req.user.tenantId, a.id));
     res.status(204).end();
   });
 
@@ -81,9 +81,9 @@ export function setupRoutes(db: Db) {
       `SELECT s.*, a.name AS academy_name,
               (SELECT count(*)::int FROM photos p WHERE p.owner_type = 'site' AND p.owner_id = s.id) AS photos
          FROM sites s JOIN academies a ON a.id = s.academy_id
-        WHERE s.academy_id = ANY($1::int[]) AND ($2::int IS NULL OR s.academy_id = $2)
+        WHERE s.academy_id IN ${idList(ids)} AND ($1::int IS NULL OR s.academy_id = $1)
         ORDER BY a.name, s.name`,
-      [ids, academyId ?? null],
+      [academyId ?? null],
     );
     res.json(rows);
   });
@@ -115,10 +115,7 @@ export function setupRoutes(db: Db) {
     const s = await own(db, 'sites', parse(id, req.params.id), req.user.tenantId, 'Sede');
     const [{ n }] = await db.query(`SELECT count(*)::int AS n FROM attendances WHERE site_id = $1`, [s.id]);
     if (n > 0) throw new HttpError(409, 'La sede tiene asistencias registradas: desactívala en lugar de borrarla', 'IN_USE');
-    await db.tx(async (q) => {
-      await q.query(`DELETE FROM photos WHERE tenant_id = $1 AND ((owner_type = 'site' AND owner_id = $2) OR (owner_type = 'space' AND owner_id IN (SELECT id FROM spaces WHERE site_id = $2)))`, [req.user.tenantId, s.id]);
-      await q.query(`DELETE FROM sites WHERE id = $1`, [s.id]);
-    });
+    await db.tx((q) => deleteSites(q, req.user.tenantId, [s.id]));
     res.status(204).end();
   });
 
@@ -130,9 +127,9 @@ export function setupRoutes(db: Db) {
       `SELECT sp.*, s.name AS site_name, s.academy_id,
               (SELECT count(*)::int FROM photos p WHERE p.owner_type = 'space' AND p.owner_id = sp.id) AS photos
          FROM spaces sp JOIN sites s ON s.id = sp.site_id
-        WHERE s.academy_id = ANY($1::int[]) AND ($2::int IS NULL OR sp.site_id = $2)
+        WHERE s.academy_id IN ${idList(ids)} AND ($1::int IS NULL OR sp.site_id = $1)
         ORDER BY s.name, sp.name`,
-      [ids, siteId ?? null],
+      [siteId ?? null],
     );
     res.json(rows);
   });
@@ -166,10 +163,7 @@ export function setupRoutes(db: Db) {
 
   r.delete('/spaces/:id', settings, async (req, res) => {
     const sp = await own(db, 'spaces', parse(id, req.params.id), req.user.tenantId, 'Espacio');
-    await db.tx(async (q) => {
-      await q.query(`DELETE FROM photos WHERE tenant_id = $1 AND owner_type = 'space' AND owner_id = $2`, [req.user.tenantId, sp.id]);
-      await q.query(`DELETE FROM spaces WHERE id = $1`, [sp.id]);
-    });
+    await db.tx((q) => deleteSpaces(q, req.user.tenantId, [sp.id]));
     res.status(204).end();
   });
 
@@ -256,8 +250,7 @@ export function setupRoutes(db: Db) {
     res.json(await db.query(
       `SELECT c.*, a.name AS academy_name, t.full_name AS teacher_name, t.kind AS teacher_kind
          FROM classes c JOIN academies a ON a.id = c.academy_id LEFT JOIN teachers t ON t.id = c.teacher_id
-        WHERE c.academy_id = ANY($1::int[]) ORDER BY c.active DESC, a.name, c.name`,
-      [ids],
+        WHERE c.academy_id IN ${idList(ids)} ORDER BY c.active DESC, a.name, c.name`,
     ));
   });
 

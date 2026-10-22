@@ -87,7 +87,25 @@ async function createPglite(dir: string): Promise<Db> {
   return wrap(lite, false);
 }
 
+export type Dialect = 'postgres' | 'mssql';
+/** Motor en uso. Casi todo el SQL es comun; las pocas diferencias las resuelve createMssql al traducir */
+export let dialect: Dialect = 'postgres';
+
+/**
+ * Motor elegido por variables de entorno:
+ *  - DB_CLIENT=mssql      -> SQL Server (base local, ver sql/sqlserver/ y docs/SERVIDORES_Y_BASE_LOCAL.md)
+ *  - DATABASE_URL=...     -> PostgreSQL (nube)
+ *  - ninguna              -> PGlite en PGLITE_DIR
+ */
 export async function openDb(): Promise<Db> {
+  if ((process.env.DB_CLIENT ?? '').toLowerCase() === 'mssql') {
+    dialect = 'mssql';
+    const { createMssql, MSSQL_SCHEMA } = await import('./db-mssql.ts');
+    const db = await createMssql();
+    await db.exec(MSSQL_SCHEMA());
+    return db;
+  }
+  dialect = 'postgres';
   const url = process.env.DATABASE_URL;
   const db = url ? await createPg(url) : await createPglite(process.env.PGLITE_DIR ?? './.data/pglite');
   await db.exec(SCHEMA);

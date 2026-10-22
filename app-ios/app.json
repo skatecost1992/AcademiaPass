@@ -3,7 +3,7 @@
     "name": "AcademiaPass",
     "slug": "academiapass-ios",
     "scheme": "academiapass",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "platforms": [
       "ios"
     ],
@@ -39,11 +39,13 @@
       "expo-sharing"
     ],
     "extra": {
-      "apiUrl": ""
+      "apiUrlCloud": "https://academiapass.onrender.com",
+      "apiUrlLocal": "http://192.168.1.173:8080",
+      "defaultServer": "cloud"
     },
     "ios": {
       "bundleIdentifier": "com.cristhianhernandez.academiapass",
-      "buildNumber": "1",
+      "buildNumber": "3",
       "supportsTablet": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,

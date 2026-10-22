@@ -26,12 +26,22 @@ const personFields = {
 
 /** Busca la persona por documento o la crea. Una misma persona puede tener cuentas en varias organizaciones (RQ26) */
 export async function upsertPerson(db: Db, documentId: string, fullName: string) {
-  const [p] = await db.query(
-    `INSERT INTO persons (document, full_name) VALUES ($1, $2)
-     ON CONFLICT (document) DO UPDATE SET document = EXCLUDED.document RETURNING id`,
-    [documentId.toUpperCase(), fullName],
-  );
+  const doc = documentId.toUpperCase();
+  const [found] = await db.query(`SELECT id FROM persons WHERE document = $1`, [doc]);
+  if (found) return found.id as number;
+  const [p] = await db.query(`INSERT INTO persons (document, full_name) VALUES ($1, $2) RETURNING id`, [doc, fullName]);
   return p.id as number;
+}
+
+/** Asocia el cliente a las academias que aun no tenga (RQ13) */
+export async function linkClientAcademies(db: Db, clientId: number, academyIds: number[]) {
+  for (const academyId of academyIds) {
+    await db.query(
+      `INSERT INTO client_academies (client_id, academy_id)
+       SELECT $1::int, $2::int WHERE NOT EXISTS (SELECT 1 FROM client_academies WHERE client_id = $1 AND academy_id = $2)`,
+      [clientId, academyId],
+    );
+  }
 }
 
 export async function assertUsernameFree(db: Db, name: string) {
@@ -112,7 +122,7 @@ export function authRoutes(db: Db) {
   // una cuenta nueva ligada a la misma persona (RQ26)
   r.post('/auth/register-client', limiter, async (req, res) => {
     const b = parse(z.object({ ...personFields, joinCode: z.string().trim().toUpperCase().min(4), consent }), req.body);
-    const [academy] = await db.query(`SELECT id, tenant_id FROM academies WHERE join_code = $1 AND active`, [b.joinCode]);
+    const [academy] = await db.query(`SELECT id, tenant_id FROM academies WHERE join_code = $1 AND active = true`, [b.joinCode]);
     if (!academy) throw new HttpError(404, 'Código de academia no válido', 'BAD_JOIN_CODE');
     const userId = await db.tx(async (q) => {
       await assertUsernameFree(q, b.username);
@@ -160,12 +170,12 @@ export function authRoutes(db: Db) {
   r.post('/me/academies', auth, async (req, res) => {
     if (req.user.role !== 'client') throw new HttpError(400, 'Solo para clientes');
     const b = parse(z.object({ joinCode: z.string().trim().toUpperCase().min(4) }), req.body);
-    const [a] = await db.query(`SELECT id, tenant_id FROM academies WHERE join_code = $1 AND active`, [b.joinCode]);
+    const [a] = await db.query(`SELECT id, tenant_id FROM academies WHERE join_code = $1 AND active = true`, [b.joinCode]);
     if (!a) throw new HttpError(404, 'Código de academia no válido', 'BAD_JOIN_CODE');
     if (a.tenant_id !== req.user.tenantId) {
       throw new HttpError(409, 'Esa academia pertenece a otra organización: crea una cuenta nueva con tu mismo documento desde "Crear cuenta".', 'OTHER_TENANT');
     }
-    await db.query(`INSERT INTO client_academies (client_id, academy_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [req.user.id, a.id]);
+    await linkClientAcademies(db, req.user.id, [a.id]);
     res.json(await profile(db, req.user.id));
   });
 

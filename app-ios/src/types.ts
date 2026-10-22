@@ -32,6 +32,7 @@ export interface Booking {
   site_id: number; space_id: number; class_id: number | null; teacher_id: number | null; client_id: number | null;
   space_name: string; site_name: string; academy_id: number; academy_name: string; teacher_name: string | null; teacher_kind: string | null;
   client_name: string | null; attendees: number; paid: number;
+  reserved: number; my_reservation_id?: number | null;
 }
 export type PlanKind = 'classes' | 'reservations' | 'access' | 'mixed';
 export interface Plan {

@@ -20,6 +20,7 @@ const STAFF_TILES: Tile[] = [
   { label: 'Clases y profesores', icon: 'school', href: '/classes', perms: ['classes'] },
   { label: 'Academias', icon: 'library', href: '/academies', admin: true },
   { label: 'Usuarios', icon: 'key', href: '/users', admin: true },
+  { label: 'Reglas de reserva', icon: 'options', href: '/settings', admin: true },
 ];
 
 function TileGrid({ tiles }: { tiles: Tile[] }) {

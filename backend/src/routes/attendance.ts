@@ -9,10 +9,9 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { HttpError, requireAdmin, requirePerm, verifyQr } from '../auth.ts';
 import type { Db } from '../db.ts';
-import { KINDS_FOR_CONTEXT, coversPlace, membershipsOf, type MembershipView } from '../lib/memberships.ts';
+import { KINDS_FOR_CONTEXT, membershipsOf, pickMembership, type MembershipView } from '../lib/memberships.ts';
 import { dateStr, dayBounds, id, optId, own, parse, range } from '../lib/util.ts';
 
-const KIND_LABEL = { classes: 'clases', reservations: 'reservas', access: 'acceso', mixed: 'mixto' };
 
 const scanBody = z.object({
   qrToken: z.string().min(10).optional(),
@@ -73,20 +72,10 @@ export function attendanceRoutes(db: Db) {
       paidOwnRental = paid > 0; // reserva propia y pagada: no descuenta del plan
     }
     if (!paidOwnRental) {
-      const kinds: readonly string[] = KINDS_FOR_CONTEXT[context];
-      const candidates = all
-        .filter((m) => m.is_current && kinds.includes(m.kind) && coversPlace(m, b.academyId, site.id))
-        // primero el que vence antes; entre iguales, el que tiene saldo limitado (el ilimitado se reserva)
-        .sort((x, y) => x.ends_on.localeCompare(y.ends_on) || (x.remaining == null ? 1 : 0) - (y.remaining == null ? 1 : 0));
-      membership = candidates[0] ?? null;
+      const picked = pickMembership(all, KINDS_FOR_CONTEXT[context], b.academyId, site.id);
+      membership = picked.membership;
       if (!membership) {
-        const current = all.filter((m) => m.status === 'active');
-        const reasons = current.map((m) => {
-          if (!m.is_current) return `${m.plan_name}: ${m.remaining === 0 ? 'sin clases disponibles' : 'fuera de vigencia'}`;
-          if (!kinds.includes(m.kind)) return `${m.plan_name}: es de ${KIND_LABEL[m.kind]}`;
-          return `${m.plan_name}: no incluye esta academia o sede`;
-        });
-        throw new HttpError(409, `${client.full_name} no tiene un plan vigente para este ingreso`, 'NO_PLAN', { reasons, client: { id: client.id, fullName: client.full_name } });
+        throw new HttpError(409, `${client.full_name} no tiene un plan vigente para este ingreso`, 'NO_PLAN', { reasons: picked.reasons, client: { id: client.id, fullName: client.full_name } });
       }
     }
 

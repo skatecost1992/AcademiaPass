@@ -267,10 +267,55 @@ describe('AcademiaPass API', () => {
     assert.ok(!academies.some((a: any) => a.id === tmp.id));
   });
 
+  it('reserva cupos en clases solo con plan y cancela hasta el limite del admin (RQ30, RQ31, RQ32)', async () => {
+    const tomorrow = (h: number) => new Date(new Date(todayAt(h)).getTime() + 24 * 3600_000).toISOString();
+    const [norte] = await ok('POST', '/bookings', { spaceId: s.salon.id, kind: 'class', classId: s.salsa.id, startsAt: tomorrow(10), endsAt: tomorrow(11) }, s.admin);
+    assert.equal(norte.group_size, 2);
+
+    // RQ30: solo sesiones de clase definidas por la academia
+    const rental = await ok('POST', '/bookings', { spaceId: s.salon.id, kind: 'rental', title: 'Alquiler', startsAt: tomorrow(14), endsAt: tomorrow(15) }, s.admin);
+    assert.equal((await call('POST', '/me/class-reservations', { bookingId: rental[0].id }, s.client)).status, 404);
+
+    // RQ31: un cliente sin plan no reserva; con plan de la sede si
+    const nuevo = await ok('POST', '/auth/register-client', { username: 'sin.plan', password: 'Clave.12345', fullName: 'Sin Plan', document: '7007', joinCode: s.academyA.join_code, consent: true });
+    assert.equal((await call('POST', '/me/class-reservations', { bookingId: norte.id }, nuevo.token)).body.code, 'NO_PLAN');
+    const mine = await ok('POST', '/me/class-reservations', { bookingId: norte.id }, s.client);
+    assert.equal(mine.reserved, 1);
+    assert.equal((await call('POST', '/me/class-reservations', { bookingId: norte.id }, s.client)).body.code, 'ALREADY_RESERVED');
+    const list = await ok('GET', `/bookings?from=${tomorrow(10).slice(0, 10)}&to=${tomorrow(10).slice(0, 10)}&kind=class`, undefined, s.client);
+    assert.equal(list.find((x: any) => x.id === norte.id).my_reservation_id, mine.id);
+
+    // Cupo lleno (cupo 2)
+    const otro = async (u: string, d: string) => {
+      const { id } = await ok('POST', '/clients', { username: u, password: 'Clave.12345', fullName: u, document: d, academyIds: [s.academyA.id] }, s.admin);
+      await ok('POST', '/memberships', { clientId: id, planId: s.planNorte.id }, s.admin);
+      await ok('POST', '/me/consent', { consent: true }, (await ok('POST', '/auth/login', { username: u, password: 'Clave.12345' })).token);
+      return (await ok('POST', '/auth/login', { username: u, password: 'Clave.12345' })).token;
+    };
+    await ok('POST', '/me/class-reservations', { bookingId: norte.id }, await otro('cupo.dos', '7008'));
+    assert.equal((await call('POST', '/me/class-reservations', { bookingId: norte.id }, await otro('cupo.tres', '7009'))).body.code, 'CAPACITY_FULL');
+    const detail = await ok('GET', `/bookings/${norte.id}`, undefined, s.admin);
+    assert.equal(detail.reservationList.length, 2);
+
+    // RQ32: con limite de 48 h no puede cancelar una clase de manana; con 1 h si
+    assert.equal((await call('PUT', '/settings', { cancelHours: 48 }, s.client)).status, 403);
+    await ok('PUT', '/settings', { cancelHours: 48 }, s.admin);
+    assert.equal((await ok('GET', '/settings', undefined, s.client)).cancelHours, 48);
+    assert.equal((await call('POST', `/me/class-reservations/${mine.id}/cancel`, {}, s.client)).body.code, 'CANCEL_DEADLINE');
+    await ok('PUT', '/settings', { cancelHours: 1 }, s.admin);
+    await ok('POST', `/me/class-reservations/${mine.id}/cancel`, {}, s.client);
+    assert.equal((await ok('GET', '/me/class-reservations', undefined, s.client)).length, 0);
+  });
+
   it('el cliente reserva un espacio y ve las reservas ajenas sin datos personales', async () => {
     const start = new Date(Date.now() + 26 * 3600_000);
     start.setUTCHours(15, 0, 0, 0); // 10:00 en Bogota
-    const b = await ok('POST', '/me/bookings', { spaceId: s.yogaRoom.id, startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 3600_000).toISOString(), groupSize: 2 }, s.client);
+    const body = { spaceId: s.yogaRoom.id, startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 3600_000).toISOString(), groupSize: 2 };
+    // RQ31: sin un plan de reservas que incluya la sede no puede reservar
+    assert.equal((await call('POST', '/me/bookings', body, s.client)).body.code, 'NO_PLAN');
+    const planRes = await ok('POST', '/plans', { name: 'Reservas Yoga', kind: 'reservations', units: 4, validityDays: 30, price: 50000, academyIds: [s.academyB.id], allSites: true }, s.admin);
+    await ok('POST', '/memberships', { clientId: s.clientId, planId: planRes.id }, s.admin);
+    const b = await ok('POST', '/me/bookings', body, s.client);
     assert.equal(b.kind, 'rental');
     await ok('POST', '/payments', { bookingId: b.id, amount: 30000, method: 'tarjeta' }, s.admin);
     const day = new Date(start.getTime() - 5 * 3600_000).toISOString().slice(0, 10);

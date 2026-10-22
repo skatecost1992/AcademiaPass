@@ -13,6 +13,7 @@ export async function deleteSpaces(q: Db, tenantId: number, spaceIds: number[]) 
   const [{ n }] = await q.query(`SELECT count(*) AS n FROM payments WHERE booking_id IN (SELECT id FROM bookings WHERE space_id IN ${list})`);
   if (n > 0) throw new HttpError(409, 'Hay reservas con pagos registrados: desactiva en lugar de borrar', 'IN_USE');
   await q.query(`UPDATE attendances SET booking_id = NULL WHERE booking_id IN (SELECT id FROM bookings WHERE space_id IN ${list})`);
+  await q.query(`DELETE FROM class_reservations WHERE booking_id IN (SELECT id FROM bookings WHERE space_id IN ${list})`);
   await q.query(`UPDATE attendances SET space_id = NULL WHERE space_id IN ${list}`);
   await q.query(`DELETE FROM bookings WHERE space_id IN ${list}`);
   await q.query(`DELETE FROM photos WHERE tenant_id = $1 AND owner_type = 'space' AND owner_id IN ${list}`, [tenantId]);

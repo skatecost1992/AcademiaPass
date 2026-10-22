@@ -1,6 +1,11 @@
-# Blueprint de Render: API + version web + base de datos PostgreSQL en la nube (RQ24, RQ27).
-# Render > New > Blueprint > selecciona el repositorio. Crea el servicio web y la base de datos.
-# Si prefieres otra base (Neon, Supabase), borra la seccion databases y define DATABASE_URL a mano.
+# Blueprint de Render: un solo servicio web con la API y la version web (RQ24, RQ27).
+#
+# La base de datos es PostgreSQL externo (Neon, gratis y sin vencimiento): la cuenta gratuita de Render solo
+# permite una base activa y ya esta en uso. Render > New > Blueprint > este repositorio, y en DATABASE_URL pega
+# la cadena de Neon (postgresql://...?sslmode=require).
+#
+# Misma base para todos: la web (https://<servicio>.onrender.com) y las apps Android/iOS en la opcion "Nube"
+# llaman a esta misma API, que usa esta unica DATABASE_URL.
 services:
   - type: web
     name: academiapass
@@ -19,15 +24,6 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: DATABASE_URL
-        fromDatabase:
-          name: academiapass-db
-          property: connectionString
-      - key: PGSSL
-        value: "off" # la conexion interna de Render no usa SSL
+        sync: false # se pide al crear el Blueprint: cadena de conexion de Neon
       - key: ADMIN_SIGNUP_CODE
         sync: false # opcional: si lo defines, solo quien lo conozca puede registrar una organizacion
-
-databases:
-  - name: academiapass-db
-    plan: free
-    databaseName: academiapass

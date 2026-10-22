@@ -239,7 +239,26 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'attendances_once_per_boo
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'attendances_tenant_time_idx')
   CREATE INDEX attendances_tenant_time_idx ON dbo.attendances (tenant_id, scanned_at);
 
+-- Horas antes del inicio hasta las que un cliente puede cancelar sus reservas (RQ32)
+IF COL_LENGTH(N'dbo.tenants', N'cancel_hours') IS NULL
+  ALTER TABLE dbo.tenants ADD cancel_hours INT NOT NULL CONSTRAINT df_tenants_cancel_hours DEFAULT 24;
+
+-- Cupos reservados por clientes en sesiones de clase (RQ30, RQ31)
+IF OBJECT_ID(N'dbo.class_reservations', N'U') IS NULL
+CREATE TABLE dbo.class_reservations (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  tenant_id INT NOT NULL REFERENCES dbo.tenants(id),
+  booking_id INT NOT NULL REFERENCES dbo.bookings(id),
+  client_id INT NOT NULL REFERENCES dbo.users(id),
+  status NVARCHAR(10) NOT NULL DEFAULT N'confirmed' CHECK (status IN (N'confirmed', N'cancelled')),
+  created_at DATETIMEOFFSET NOT NULL DEFAULT SYSDATETIMEOFFSET(),
+  cancelled_at DATETIMEOFFSET NULL
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'class_reservations_once')
+  CREATE UNIQUE INDEX class_reservations_once ON dbo.class_reservations (booking_id, client_id) WHERE status = N'confirmed';
+
 DECLARE @tablas INT = (SELECT COUNT(*) FROM sys.tables WHERE name IN
   (N'tenants', N'persons', N'academies', N'sites', N'users', N'spaces', N'photos', N'teachers', N'classes', N'bookings',
-   N'plans', N'plan_academies', N'plan_sites', N'client_academies', N'memberships', N'payments', N'attendances'));
-PRINT N'Esquema de AcademiaPass listo (' + CAST(@tablas AS NVARCHAR(5)) + N' de 17 tablas).';
+   N'plans', N'plan_academies', N'plan_sites', N'client_academies', N'memberships', N'payments', N'attendances',
+   N'class_reservations'));
+PRINT N'Esquema de AcademiaPass listo (' + CAST(@tablas AS NVARCHAR(5)) + N' de 18 tablas).';

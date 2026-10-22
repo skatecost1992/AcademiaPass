@@ -8,6 +8,7 @@ import type { Booking } from '../../types';
 
 interface Detail extends Booking {
   attendeeList: { id: number; scanned_at: string; over_capacity: boolean; client_id: number; full_name: string }[];
+  reservationList: { id: number; created_at: string; client_id: number; full_name: string }[];
   payments: { id: number; amount: number; method: string; reference: string | null; paid_at: string }[];
 }
 
@@ -40,8 +41,20 @@ export default function BookingDetail() {
               {b.teacher_name ? <InfoRow label="Profesor" value={`${b.teacher_name} (${b.teacher_kind === 'external' ? 'externo' : 'interno'})`} /> : null}
               {b.client_name ? <InfoRow label="Cliente" value={b.client_name} /> : null}
               <InfoRow label="Asistentes / cupo" value={`${b.attendees} / ${b.group_size}`} />
+              {b.kind === 'class' ? <InfoRow label="Cupos reservados" value={`${b.reserved} / ${b.group_size}`} /> : null}
               {b.notes ? <InfoRow label="Notas" value={b.notes} /> : null}
             </Card>
+            {b.kind === 'class' ? (
+              <Section title={`Cupos reservados (${b.reservationList.length})`}>
+                {b.reservationList.length === 0 ? <Empty text="Nadie ha reservado cupo." icon="people-outline" /> : (
+                  <Card>
+                    {b.reservationList.map((r) => (
+                      <InfoRow key={r.id} label={r.full_name} value={`${b.attendeeList.some((a) => a.client_id === r.client_id) ? 'Asistió' : 'Reservó'} · ${fmtDateTime(r.created_at)}`} />
+                    ))}
+                  </Card>
+                )}
+              </Section>
+            ) : null}
             <Section title={`Asistentes (${b.attendeeList.length})`}>
               {b.attendeeList.length === 0 ? <Empty text="Nadie ha registrado ingreso." icon="people-outline" /> : (
                 <Card>

@@ -125,6 +125,10 @@ Todos los reportes aceptan `from`, `to` (AAAA-MM-DD), `academyId`, `siteId` y `g
 | 26 Nueva cuenta por organización ligada a la persona | `persons` + `users` |
 | 28 APK e iOS | `build-apk.ps1`, `.github/workflows/ios-ipa.yml`, `build-ipa.sh` |
 | 29 Fotos en Base64 | `photos`, `PhotoGallery` |
+| 30 Solo se reserva lo definido por el admin | `POST /me/class-reservations` solo acepta sesiones `kind=class` programadas, en espacios activos con aforo |
+| 31 Reservar exige plan con la sede y el tipo | `assertClientPlan` (`routes/reservations.ts`): clases → plan de clases/mixto; espacios → plan de reservas/mixto |
+| 32 Cancelar hasta el límite del admin | `tenants.cancel_hours`, `GET/PUT /settings`, pantalla *Reglas de reserva*; `assertCanCancel` |
+| 33 Info e imágenes del espacio al elegir sede y salón | `SpaceInfo` en `BookingForm` (descripción, fotos, aforo, horario) |
 
 ## 7. Pruebas
 

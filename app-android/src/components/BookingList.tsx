@@ -19,7 +19,10 @@ export function BookingList({ bookings, onPress, showMoney }: { bookings: Bookin
         <View key={day} style={{ marginBottom: 6 }}>
           <Text style={{ fontWeight: '800', color: colors.muted, marginVertical: 6, textTransform: 'capitalize' }}>{day}</Text>
           {list.map((b) => {
-            const full = b.attendees >= b.group_size;
+            // Clases que aun no empiezan: cuenta cupos reservados; las demas, asistentes registrados
+            const upcomingClass = b.kind === 'class' && new Date(b.starts_at) > new Date();
+            const used = upcomingClass ? Math.max(b.reserved ?? 0, b.attendees) : b.attendees;
+            const full = used >= b.group_size;
             const who = b.kind === 'class' ? b.teacher_name && `Prof. ${b.teacher_name}${b.teacher_kind === 'external' ? ' (externo)' : ''}` : b.client_name ?? b.teacher_name;
             return (
               <ListItem
@@ -32,7 +35,8 @@ export function BookingList({ bookings, onPress, showMoney }: { bookings: Bookin
                 right={
                   b.status === 'cancelled' ? <Badge text="Cancelada" tone="muted" /> : (
                     <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                      <Badge text={`${b.attendees}/${b.group_size}`} tone={full ? 'danger' : 'success'} />
+                      <Badge text={`${used}/${b.group_size}${full ? ' lleno' : ''}`} tone={full ? 'danger' : 'success'} />
+                      {b.my_reservation_id ? <Badge text="Tu cupo" tone="primary" /> : null}
                       {showMoney && b.kind === 'rental' ? <Badge text={b.paid > 0 ? 'Pagada' : 'Sin pago'} tone={b.paid > 0 ? 'success' : 'accent'} /> : null}
                     </View>
                   )

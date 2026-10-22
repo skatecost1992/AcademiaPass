@@ -33,5 +33,12 @@ cliente (o busca por documento). Resultado:
 1. **Crear cuenta de cliente** con el código de la academia y acepta el tratamiento de datos.
 2. **Mostrar mi código QR** en la recepción (se renueva solo cada pocos minutos).
 3. **Mi reporte**: planes, clases tomadas y restantes, días asistidos por semana o mes y PDF.
-4. **Horario de clases**, **Mis reservas** (reservar un espacio) y **Unirme a otra academia** (de la misma
-   organización). Para una academia de otra organización se crea una cuenta nueva con el mismo documento.
+4. **Horario de clases**: toca una clase para **reservar o cancelar tu cupo**. Se necesita un plan vigente de
+   clases que incluya esa academia y sede, y que la clase tenga cupo.
+5. **Mis reservas**: tus clases con cupo y tus espacios reservados. Reservar un espacio exige un plan de reservas
+   de esa sede; al elegir sede y espacio se ven su descripción, fotos, aforo y horario. Solo se puede cancelar
+   hasta el límite que fija el administrador (por defecto 1 día antes).
+6. **Unirme a otra academia** (de la misma organización). Para una academia de otra organización se crea una
+   cuenta nueva con el mismo documento.
+
+El administrador fija el límite de cancelación en **Reglas de reserva** (inicio).

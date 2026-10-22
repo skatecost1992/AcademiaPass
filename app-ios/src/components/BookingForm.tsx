@@ -11,6 +11,7 @@ import { Text, View } from 'react-native';
 import { post, qs } from '../lib/api';
 import { DAYS, addDays, fmtTime, isDate, isTime, toIso, today } from '../lib/format';
 import type { Booking, ClassDef, ClientRow, Site, Space, Teacher } from '../types';
+import { PhotoGallery } from './PhotoGallery';
 import { PlacePicker } from './shared';
 import { Badge, Button, Card, Chips, Field, Gap, InfoRow, Muted, RowWrap, Section, colors, errorText, notify, useLoad } from './ui';
 
@@ -18,6 +19,8 @@ function SpaceInfo({ space, site }: { space: Space; site?: Site }) {
   const day = site?.opening_hours ?? [];
   return (
     <Card>
+      {space.description ? <Muted style={{ marginBottom: 6 }}>{space.description}</Muted> : null}
+      <PhotoGallery ownerType="space" ownerId={space.id} editable={false} />
       <InfoRow label="Aforo máximo" value={`${space.max_capacity} personas`} />
       <InfoRow label="Grupos simultáneos" value={space.allow_multi_group ? `hasta ${space.max_groups}${space.capacity_per_group ? ` de ${space.capacity_per_group} personas` : ''}` : 'Uno a la vez'} />
       {day.length ? (

@@ -1,27 +1,29 @@
 # Despliegue y compilación
 
-## 1. Base de datos y API en la nube (Render)
+## 1. Base de datos (Neon) y API + web en la nube (Render)
 
-Requisito: cuenta en GitHub y en [render.com](https://render.com) (plan gratuito).
+La cuenta gratuita de Render solo permite **una** base de datos activa (ya usada por otro proyecto), así que
+AcademiaPass usa **PostgreSQL en Neon** (gratis y sin vencimiento) y Render solo aloja el servicio web.
 
-1. Crea un repositorio en GitHub y sube la carpeta `AcademiaPass/` (la raíz del repo debe contener
-   `render.yaml`).
-2. En Render: **New → Blueprint**, elige el repositorio y confirma. Se crean:
-   - `academiapass-db`: PostgreSQL.
-   - `academiapass`: la API y la versión web (`buildCommand` compila la web; `JWT_SECRET` se genera solo).
-3. Espera el primer despliegue y abre `https://academiapass.onrender.com/api/health` (el nombre exacto lo da
-   Render). Debe responder `{"ok":true,...}`.
-4. Opcional: define `ADMIN_SIGNUP_CODE` en *Environment* para que solo quien tenga el código pueda crear
-   organizaciones.
+**Una sola base para todo:** la web (`https://<servicio>.onrender.com`) y las apps Android/iOS en la opción
+**Nube** llaman a la misma API de Render, que usa una única `DATABASE_URL`. Lo que se registra desde cualquiera
+de ellas se ve en las demás.
+
+1. **Neon**: entra a https://neon.tech con tu cuenta de GitHub → *Create project* (nombre `academiapass`,
+   región *AWS US East* o la más cercana) → copia la **Connection string** (empieza por `postgresql://` y
+   termina en `?sslmode=require`). No la guardes en el repositorio.
+2. **Render**: **New → Blueprint** → repositorio `AcademiaPass`. Render lee `render.yaml` y crea solo el
+   servicio web `academiapass`. Te pedirá:
+   - `DATABASE_URL`: pega la cadena de Neon.
+   - `ADMIN_SIGNUP_CODE`: opcional (vacío = cualquiera puede registrar una organización).
+3. Pulsa **Apply** y espera el estado **Live**. Abre `https://<servicio>.onrender.com/api/health`: debe
+   responder `{"ok":true,...}`. Al arrancar se crean las tablas y el usuario `admin` (clave inicial
+   `Bogota.2027`) en la base de Neon.
+4. Si ya habías creado el Blueprint y falló, ábrelo y pulsa **Manual sync** después de subir este cambio.
 
 Notas:
-- El plan gratuito de Render "duerme" el servicio tras 15 minutos sin uso (el primer acceso tarda ~1 minuto) y
-  la base gratuita vence a los 30 días. Para uso real usa un plan pago o una base externa.
-- **Base externa (Neon o Supabase, gratuitas y sin vencimiento)**: crea la base, copia su cadena de conexión
-  (`postgresql://...?sslmode=require`), borra la sección `databases` de `render.yaml`, borra `PGSSL` y define
-  `DATABASE_URL` con esa cadena en Render.
-- El esquema se crea solo al arrancar. Para datos de prueba en la nube: `DATABASE_URL=... npm run seed` desde
-  `backend/` en tu PC.
+- El plan gratuito de Render "duerme" el servicio tras 15 minutos sin uso (el primer acceso tarda ~1 minuto).
+- Para datos de prueba en la nube: con `DATABASE_URL` de Neon en tu terminal, `npm run seed` desde `backend/`.
 
 ## 2. Apuntar las apps al servidor
 

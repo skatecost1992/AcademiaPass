@@ -62,6 +62,25 @@ export async function membershipsOf(db: Db, clientIds: number[]): Promise<Member
   });
 }
 
+const KIND_LABEL: Record<string, string> = { classes: 'clases', reservations: 'reservas', access: 'acceso', mixed: 'mixto' };
+
+/**
+ * Plan vigente con saldo que cubre la academia, la sede y el tipo de uso (clase, reserva de espacio o ingreso
+ * general). Si hay varios, el que vence primero. Si no hay, explica por que no sirve cada plan (RQ16, RQ31).
+ */
+export function pickMembership(all: MembershipView[], kinds: readonly string[], academyId: number, siteId: number) {
+  const candidates = all
+    .filter((m) => m.is_current && kinds.includes(m.kind) && coversPlace(m, academyId, siteId))
+    .sort((x, y) => x.ends_on.localeCompare(y.ends_on) || (x.remaining == null ? 1 : 0) - (y.remaining == null ? 1 : 0));
+  if (candidates[0]) return { membership: candidates[0], reasons: [] as string[] };
+  const reasons = all.filter((m) => m.status === 'active').map((m) => {
+    if (!m.is_current) return `${m.plan_name}: ${m.remaining === 0 ? 'sin clases disponibles' : 'fuera de vigencia'}`;
+    if (!kinds.includes(m.kind)) return `${m.plan_name}: es de ${KIND_LABEL[m.kind]}`;
+    return `${m.plan_name}: no incluye esta academia o sede`;
+  });
+  return { membership: null, reasons };
+}
+
 /** Que tipo de plan cubre cada contexto de ingreso */
 export const KINDS_FOR_CONTEXT = {
   class: ['classes', 'mixed'],

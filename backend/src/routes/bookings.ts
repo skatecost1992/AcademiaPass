@@ -12,6 +12,7 @@ import { HttpError, isStaffish } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { assertSpaceAvailable, assertWithinOpeningHours, type Space } from '../lib/capacity.ts';
 import { dateStr, dayBounds, id, idList, isoDateTime, optId, optText, own, parse, range, todayLocal } from '../lib/util.ts';
+import { assertCanCancel, assertClientPlan, myReservationIds } from './reservations.ts';
 import { visibleAcademyIds } from './setup.ts';
 
 const WEEK_MS = 7 * 24 * 3600_000;
@@ -36,6 +37,7 @@ export const BOOKING_SELECT = `
          sp.name AS space_name, s.name AS site_name, s.academy_id, a.name AS academy_name,
          t.full_name AS teacher_name, t.kind AS teacher_kind, cu.full_name AS client_name,
          (SELECT count(*)::int FROM attendances att WHERE att.booking_id = b.id) AS attendees,
+         (SELECT count(*)::int FROM class_reservations cr WHERE cr.booking_id = b.id AND cr.status = 'confirmed') AS reserved,
          (SELECT coalesce(sum(amount), 0)::float8 FROM payments p WHERE p.booking_id = b.id) AS paid
     FROM bookings b
     JOIN spaces sp ON sp.id = b.space_id
@@ -136,7 +138,8 @@ export function bookingRoutes(db: Db) {
       [req.user.tenantId, start, end, q.siteId ?? null, q.spaceId ?? null, q.academyId ?? null, q.kind ?? null, !!q.includeCancelled],
     );
     if (isStaffish(req.user)) return res.json(rows);
-    res.json(rows.map((b) => (b.kind === 'rental' && b.client_id !== req.user.id
+    const mine = await myReservationIds(db, req.user.id, rows.filter((b) => b.kind === 'class').map((b) => b.id));
+    res.json(rows.map((b) => ({ ...b, my_reservation_id: mine.get(b.id) ?? null })).map((b) => (b.kind === 'rental' && b.client_id !== req.user.id
       ? { ...b, title: 'Espacio reservado', client_id: null, client_name: null, notes: null, paid: 0 }
       : { ...b, paid: b.client_id === req.user.id ? b.paid : 0 })));
   });
@@ -149,7 +152,10 @@ export function bookingRoutes(db: Db) {
       ? await db.query(`SELECT att.id, att.scanned_at, att.over_capacity, u.id AS client_id, u.full_name FROM attendances att JOIN users u ON u.id = att.client_id WHERE att.booking_id = $1 ORDER BY att.scanned_at`, [bid])
       : [];
     const payments = await db.query(`SELECT id, amount::float8, method, reference, paid_at FROM payments WHERE booking_id = $1 ORDER BY paid_at`, [bid]);
-    res.json({ ...b, attendeeList: attendees, payments });
+    const reservations = isStaffish(req.user)
+      ? await db.query(`SELECT cr.id, cr.created_at, u.id AS client_id, u.full_name FROM class_reservations cr JOIN users u ON u.id = cr.client_id WHERE cr.booking_id = $1 AND cr.status = 'confirmed' ORDER BY cr.created_at`, [bid])
+      : [];
+    res.json({ ...b, attendeeList: attendees, reservationList: reservations, payments });
   });
 
   r.post('/bookings', async (req, res) => {
@@ -166,6 +172,7 @@ export function bookingRoutes(db: Db) {
     const space = await loadSpace(db, b.spaceId, req.user.tenantId);
     if (!(await visibleAcademyIds(db, req)).includes(space.academy_id)) throw new HttpError(404, 'Espacio no encontrado', 'NOT_FOUND');
     if (new Date(b.startsAt) < new Date()) throw new HttpError(400, 'La reserva debe ser en el futuro');
+    await assertClientPlan(db, req, space.academy_id, space.site_id, 'rental');
     const rows = await createBookings(db, req, {
       ...b, kind: 'rental', clientId: req.user.id, title: `Reserva de ${req.user.fullName}`, repeatWeeks: 1, classId: null, teacherId: null,
     });
@@ -177,7 +184,7 @@ export function bookingRoutes(db: Db) {
     const canStaff = req.user.permissions.includes(b.kind === 'class' ? 'classes' : 'bookings');
     const isOwner = req.user.role === 'client' && b.client_id === req.user.id;
     if (!canStaff && !isOwner) throw new HttpError(403, 'No tienes permiso para esta acción', 'FORBIDDEN');
-    if (isOwner && !canStaff && new Date(b.starts_at) < new Date()) throw new HttpError(409, 'La reserva ya empezó; pide al personal que la cancele');
+    if (isOwner && !canStaff) await assertCanCancel(db, req.user.tenantId, b.starts_at);
     await db.query(`UPDATE bookings SET status = 'cancelled' WHERE id = $1`, [b.id]);
     res.json({ ok: true });
   });

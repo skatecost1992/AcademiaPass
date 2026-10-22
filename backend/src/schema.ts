@@ -220,4 +220,19 @@ CREATE TABLE IF NOT EXISTS attendances (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS attendances_once_per_booking ON attendances (client_id, booking_id) WHERE booking_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS attendances_tenant_time_idx ON attendances (tenant_id, scanned_at);
+
+-- Horas antes del inicio hasta las que un cliente puede cancelar sus reservas (RQ32)
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cancel_hours int NOT NULL DEFAULT 24;
+
+-- Cupos reservados por clientes en sesiones de clase (RQ30, RQ31)
+CREATE TABLE IF NOT EXISTS class_reservations (
+  id serial PRIMARY KEY,
+  tenant_id int NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  booking_id int NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+  client_id int NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status text NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed', 'cancelled')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  cancelled_at timestamptz
+);
+CREATE UNIQUE INDEX IF NOT EXISTS class_reservations_once ON class_reservations (booking_id, client_id) WHERE status = 'confirmed';
 `;

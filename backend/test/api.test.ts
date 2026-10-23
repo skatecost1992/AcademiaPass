@@ -11,6 +11,7 @@ process.env.JWT_SECRET = 'test-secret';
 const { createApp } = await import('../src/app.ts');
 const { openDb } = await import('../src/db.ts');
 const { ensureAdmin } = await import('../src/bootstrap.ts');
+const { describePg } = await import('../src/db.ts');
 
 let base = '';
 let close = () => {};
@@ -49,6 +50,14 @@ after(() => close());
 
 describe('AcademiaPass API', () => {
   const s: Record<string, any> = {};
+
+  it('informa el motor y la ubicacion de la base sin credenciales', async () => {
+    const h = await ok('GET', '/health');
+    assert.equal(h.database.engine, 'PostgreSQL');
+    const neon = describePg('postgresql://dueno:clave-secreta@ep-demo-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require');
+    assert.deepEqual(neon, { engine: 'PostgreSQL', provider: 'Neon', host: 'ep-demo-pooler.c-6.us-east-2.aws.neon.tech', database: 'neondb' });
+    assert.ok(!JSON.stringify(neon).includes('clave-secreta') && !JSON.stringify(neon).includes('dueno'));
+  });
 
   it('crea el usuario admin en la tabla users con clave cifrada y no lo duplica', async () => {
     assert.equal(await ensureAdmin(database), true);

@@ -91,6 +91,19 @@ export type Dialect = 'postgres' | 'mssql';
 /** Motor en uso. Casi todo el SQL es comun; las pocas diferencias las resuelve createMssql al traducir */
 export let dialect: Dialect = 'postgres';
 
+/** Motor y ubicacion de la base para mostrar en la app (nunca usuario ni clave) */
+export let dbInfo: { engine: string; provider: string; host: string; database: string } = { engine: 'PostgreSQL', provider: 'PGlite', host: 'local', database: '' };
+
+export function describePg(url: string) {
+  try {
+    const u = new URL(url);
+    const provider = /neon\.tech$/.test(u.hostname) ? 'Neon' : /render\.com$|^dpg-/.test(u.hostname) ? 'Render' : /supabase/.test(u.hostname) ? 'Supabase' : 'PostgreSQL';
+    return { engine: 'PostgreSQL', provider, host: u.hostname, database: u.pathname.replace(/^\//, '') };
+  } catch {
+    return { engine: 'PostgreSQL', provider: 'PostgreSQL', host: '', database: '' };
+  }
+}
+
 /**
  * Motor elegido por variables de entorno:
  *  - DB_CLIENT=mssql      -> SQL Server (base local, ver sql/sqlserver/ y docs/SERVIDORES_Y_BASE_LOCAL.md)
@@ -103,10 +116,16 @@ export async function openDb(): Promise<Db> {
     const { createMssql, MSSQL_SCHEMA } = await import('./db-mssql.ts');
     const db = await createMssql();
     await db.exec(MSSQL_SCHEMA());
+    dbInfo = {
+      engine: 'SQL Server', provider: 'SQL Server',
+      host: process.env.ACADEMIAPASS_SQL_SERVER || (await import('node:os')).hostname(),
+      database: process.env.ACADEMIAPASS_DB_NAME || 'AcademiaPass',
+    };
     return db;
   }
   dialect = 'postgres';
   const url = process.env.DATABASE_URL;
+  dbInfo = url ? describePg(url) : { engine: 'PostgreSQL', provider: 'PGlite', host: 'local', database: process.env.PGLITE_DIR ?? './.data/pglite' };
   const db = url ? await createPg(url) : await createPglite(process.env.PGLITE_DIR ?? './.data/pglite');
   await db.exec(SCHEMA);
   return db;

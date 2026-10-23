@@ -3,7 +3,7 @@
     "name": "AcademiaPass",
     "slug": "academiapass-ios",
     "scheme": "academiapass",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "platforms": [
       "ios"
     ],
@@ -41,11 +41,13 @@
     "extra": {
       "apiUrlCloud": "https://academiapass.onrender.com",
       "apiUrlLocal": "http://192.168.1.173:8080",
-      "defaultServer": "cloud"
+      "defaultServer": "cloud",
+      "cloudDatabase": "PostgreSQL en Neon · ep-patient-night-b4jrwjmw-pooler.c-6.us-east-2.aws.neon.tech",
+      "localDatabase": "SQL Server · DESKTOP-FODDHQ6 / AcademiaPass"
     },
     "ios": {
       "bundleIdentifier": "com.cristhianhernandez.academiapass",
-      "buildNumber": "5",
+      "buildNumber": "6",
       "supportsTablet": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,

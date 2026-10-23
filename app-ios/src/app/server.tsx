@@ -1,16 +1,45 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
-import React, { useState } from 'react';
+import Constants from 'expo-constants';
+import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, Field, Gap, Muted, Screen, Section, colors, errorText } from '../components/ui';
 import { type ServerMode, checkServer, getApiUrl, getServerMode, isWebSameOrigin, loginAt, normalizeUrl, presetUrl, setServer } from '../lib/api';
 import { useSession } from '../session';
 import type { Profile } from '../types';
 
-const OPTIONS: { mode: Exclude<ServerMode, 'custom'>; title: string; icon: React.ComponentProps<typeof Ionicons>['name']; desc: string }[] = [
-  { mode: 'cloud', title: 'Nube (web)', icon: 'cloud-outline', desc: 'Servidor en internet. Los mismos datos en todos los teléfonos y en la web.' },
-  { mode: 'local', title: 'Local (red Wi-Fi)', icon: 'desktop-outline', desc: 'Backend en tu PC con la base de SQL Server. El teléfono debe estar en la misma red Wi-Fi.' },
+const OPTIONS: { mode: Exclude<ServerMode, 'custom'>; title: string; icon: React.ComponentProps<typeof Ionicons>['name']; desc: string; dbKey: string }[] = [
+  { mode: 'cloud', title: 'Nube · PostgreSQL en Neon', icon: 'cloud-outline', dbKey: 'cloudDatabase', desc: 'Los mismos datos en todos los teléfonos y en la web.' },
+  { mode: 'local', title: 'Local · SQL Server', icon: 'desktop-outline', dbKey: 'localDatabase', desc: 'Base en tu PC. El teléfono debe estar en la misma red Wi-Fi.' },
 ];
+
+type DbInfo = { engine: string; provider: string; host: string; database: string };
+
+/** Base de datos que reporta cada servidor en /api/health; si no responde, la descripcion de app.json */
+function useDatabaseInfo() {
+  const [info, setInfo] = useState<Record<string, { text: string; online: boolean }>>({});
+  useEffect(() => {
+    const extra = (Constants.expoConfig?.extra ?? {}) as Record<string, string>;
+    for (const o of OPTIONS) {
+      const fallback = extra[o.dbKey] ?? '';
+      setInfo((x) => ({ ...x, [o.mode]: { text: fallback, online: false } }));
+      const url = presetUrl(o.mode);
+      if (!url) continue;
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 8000);
+      fetch(`${url}/api/health`, { signal: ctrl.signal })
+        .then((r) => r.json())
+        .then((h: { database?: DbInfo }) => {
+          const d = h.database;
+          const text = d ? `${d.engine}${d.provider !== d.engine ? ` en ${d.provider}` : ''} · ${d.host}${d.database && d.engine === 'SQL Server' ? ` / ${d.database}` : ''}` : fallback;
+          setInfo((x) => ({ ...x, [o.mode]: { text, online: true } }));
+        })
+        .catch(() => {})
+        .finally(() => clearTimeout(t));
+    }
+  }, []);
+  return info;
+}
 
 /**
  * Seleccion del servidor (nube, local u otra direccion). Solo un administrador puede cambiarlo: el usuario y la
@@ -34,6 +63,7 @@ export default function Server() {
 function ServerOptions() {
   const { user, signIn } = useSession();
   const [mode, setMode] = useState<ServerMode>(getServerMode());
+  const dbs = useDatabaseInfo();
   const [custom, setCustom] = useState(getServerMode() === 'custom' ? getApiUrl() : '');
   const [username, setUsername] = useState(user?.role === 'admin' ? user.username : 'admin');
   const [password, setPassword] = useState('');
@@ -78,7 +108,13 @@ function ServerOptions() {
                 <Ionicons name={o.icon} size={16} color={colors.text} />
                 <Text style={s.title}>{o.title}</Text>
               </View>
-              <Text style={s.url}>{url || 'No configurada en app.json'}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 }}>
+                <Ionicons name="server-outline" size={13} color={colors.primary} />
+                <Text style={[s.url, { flex: 1, marginVertical: 0 }]}>Base de datos: {dbs[o.mode]?.text || '—'}</Text>
+              </View>
+              <Muted style={{ fontSize: 12 }}>
+                API: {url || 'no configurada'} · {dbs[o.mode]?.online ? 'en línea' : 'sin respuesta todavía'}
+              </Muted>
               <Muted style={{ fontSize: 12 }}>{o.desc}</Muted>
             </View>
           </Pressable>

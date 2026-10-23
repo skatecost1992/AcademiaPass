@@ -3,7 +3,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { HttpError, authenticate } from './auth.ts';
-import type { Db } from './db.ts';
+import { type Db, dbInfo } from './db.ts';
 import { attendanceRoutes } from './routes/attendance.ts';
 import { authRoutes } from './routes/auth.ts';
 import { bookingRoutes } from './routes/bookings.ts';
@@ -21,7 +21,7 @@ export function createApp(db: Db) {
 
   app.get('/api/health', async (_req, res) => {
     await db.query('SELECT 1');
-    res.json({ ok: true, service: 'academiapass', time: new Date().toISOString() });
+    res.json({ ok: true, service: 'academiapass', time: new Date().toISOString(), database: dbInfo });
   });
 
   // Rutas publicas (login y registro) y luego todo lo demas exige sesion

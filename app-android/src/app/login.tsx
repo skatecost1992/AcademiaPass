@@ -14,8 +14,9 @@ export default function Login() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [server, setServerLabel] = useState('');
-  const MODE = { cloud: 'Nube', local: 'Local', custom: 'Servidor' } as const;
-  useFocusEffect(useCallback(() => setServerLabel(getApiUrl() ? `${MODE[getServerMode()]} · ${getApiUrl()}` : 'Configurar servidor'), [])); // eslint-disable-line react-hooks/exhaustive-deps
+  // Se muestra la base de datos de cada opcion; la direccion de la API queda en la pantalla Servidor
+  const MODE = { cloud: 'Nube · PostgreSQL en Neon', local: 'Local · SQL Server', custom: 'Servidor' } as const;
+  useFocusEffect(useCallback(() => setServerLabel(getApiUrl() ? (getServerMode() === 'custom' ? `Servidor · ${getApiUrl()}` : MODE[getServerMode()]) : 'Configurar servidor'), [])); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submit = async () => {
     setError(null);

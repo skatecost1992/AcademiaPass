@@ -49,6 +49,15 @@ export interface AuthUser {
   fullName: string;
   username: string;
   consentAt: string | null;
+  isSuperadmin: boolean; // RQ58: administrador general (usuario base)
+}
+
+/** RQ58: mensaje si la organizacion aun no esta activa; el administrador general siempre puede entrar */
+export function tenantBlock(status: string, isSuperadmin: boolean) {
+  if (isSuperadmin || status === 'active') return null;
+  return status === 'rejected'
+    ? new HttpError(403, 'El registro de tu organización fue rechazado por el administrador general.', 'TENANT_REJECTED')
+    : new HttpError(403, 'Tu organización está pendiente de activación por el administrador general.', 'TENANT_PENDING');
 }
 
 declare global {
@@ -111,10 +120,13 @@ export function authenticate(db: Db) {
     }
     // Se lee el usuario en cada peticion para que un cambio de permisos o una desactivacion aplique de inmediato
     const [u] = await db.query(
-      `SELECT id, tenant_id, person_id, role, permissions, full_name, username, consent_at, active FROM users WHERE id = $1`,
+      `SELECT u.id, u.tenant_id, u.person_id, u.role, u.permissions, u.full_name, u.username, u.consent_at, u.active, u.is_superadmin, t.status AS tenant_status
+         FROM users u JOIN tenants t ON t.id = u.tenant_id WHERE u.id = $1`,
       [userId],
     );
     if (!u || !u.active) throw new HttpError(401, 'La cuenta no está activa', 'UNAUTHENTICATED');
+    const blocked = tenantBlock(u.tenant_status, !!u.is_superadmin);
+    if (blocked) throw blocked;
     req.user = {
       id: u.id,
       tenantId: u.tenant_id,
@@ -124,6 +136,7 @@ export function authenticate(db: Db) {
       fullName: u.full_name,
       username: u.username,
       consentAt: u.consent_at,
+      isSuperadmin: !!u.is_superadmin,
     };
     next();
   };

@@ -43,6 +43,20 @@ export function toIso(date: string, time: string) {
   return new Date(y, m - 1, d, h, mi).toISOString();
 }
 
+/** 'YYYY-MM-DD' + N meses calendario */
+export function addMonths(date: string, months: number) {
+  const [y, m, d] = date.split('-').map(Number);
+  const last = new Date(y, m - 1 + months + 1, 0).getDate();
+  return ymd(new Date(y, m - 1 + months, Math.min(d, last)));
+}
+
+/** Fin de vigencia de un plan que empieza en `start` (RQ55) */
+export const planEnd = (start: string, plan: { validity_days: number; validity_months: number | null }) =>
+  plan.validity_months ? addDays(addMonths(start, plan.validity_months), -1) : addDays(start, plan.validity_days - 1);
+
+export const validityText = (plan: { validity_days: number; validity_months: number | null }) =>
+  plan.validity_months ? `${plan.validity_months} ${plan.validity_months === 1 ? 'mes' : 'meses'}` : `${plan.validity_days} días`;
+
 export const isDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
 export const isTime = (s: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
 

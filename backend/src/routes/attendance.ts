@@ -167,8 +167,17 @@ export function attendanceRoutes(db: Db) {
   const r = Router();
 
   r.post('/attendance/scan', requirePerm('attendance'), async (req, res) => {
-    const out = await performScan(db, req.user, parse(scanBody, req.body));
-    res.status(out.dryRun ? 200 : 201).json(out);
+    const body = parse(scanBody, req.body);
+    // Registro de cada intento en la consola del servidor para diagnosticar lecturas (sin el token del QR)
+    const tag = `[ingreso] ${new Date().toISOString()} por=${req.user.username} via=${body.qrToken ? 'qr' : 'manual'} sede=${body.siteId} clase=${body.bookingId ?? 'general'}`;
+    try {
+      const out = await performScan(db, req.user, body);
+      console.info(`${tag} cliente=${out.client.id} -> ${out.dryRun ? 'simulado' : `registrado #${out.attendanceId}`}`);
+      res.status(out.dryRun ? 200 : 201).json(out);
+    } catch (e) {
+      console.info(`${tag} -> rechazado ${e instanceof HttpError ? `${e.code ?? e.status}: ${e.message}` : 'error interno'}`);
+      throw e;
+    }
   });
 
   // ------------------------------------------------------------------ Autorizaciones de aforo (RQ37)

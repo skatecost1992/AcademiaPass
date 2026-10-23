@@ -7,7 +7,7 @@ import { fmtDate, planKindLabel, unitsText } from '../lib/format';
 import { useSession } from '../session';
 import type { Permission, UnifiedReport } from '../types';
 
-interface Tile { label: string; icon: IconName; href: Href; perms?: Permission[]; admin?: boolean }
+interface Tile { label: string; icon: IconName; href: Href; perms?: Permission[]; admin?: boolean; superadmin?: boolean }
 
 const STAFF_TILES: Tile[] = [
   { label: 'Escanear QR', icon: 'scan', href: '/scan', perms: ['attendance'] },
@@ -21,6 +21,7 @@ const STAFF_TILES: Tile[] = [
   { label: 'Clases y profesores', icon: 'school', href: '/classes', perms: ['classes'] },
   { label: 'Academias', icon: 'library', href: '/academies', admin: true },
   { label: 'Usuarios', icon: 'key', href: '/users', admin: true },
+  { label: 'Organizaciones', icon: 'globe', href: '/organizations', superadmin: true }, // RQ58
   { label: 'Reglas de reserva', icon: 'options', href: '/settings', perms: ['booking_rules'] }, // RQ44
 ];
 
@@ -94,7 +95,7 @@ function ClientHome() {
 export default function Home() {
   const { user, isAdmin, can } = useSession();
   if (!user) return null;
-  const tiles = STAFF_TILES.filter((t) => (t.admin ? isAdmin : can(...(t.perms ?? []))));
+  const tiles = STAFF_TILES.filter((t) => (t.superadmin ? !!user.isSuperadmin : t.admin ? isAdmin : can(...(t.perms ?? []))));
   return (
     <Screen title={user.tenant.name} right={<ProfileButton />}>
       {user.role === 'client' ? (

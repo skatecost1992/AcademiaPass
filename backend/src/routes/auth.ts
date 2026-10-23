@@ -5,7 +5,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import {
-  CONSENT_VERSION, HttpError, PERMISSIONS, QR_TTL_SECONDS, authenticate, checkPassword, hashPassword, signQr, signSession,
+  CONSENT_VERSION, tenantBlock, HttpError, PERMISSIONS, QR_TTL_SECONDS, authenticate, checkPassword, hashPassword, signQr, signSession,
 } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { joinCode, optText, parse, text } from '../lib/util.ts';
@@ -25,6 +25,9 @@ const personFields = {
 };
 
 /** Busca la persona por documento o la crea. Una misma persona puede tener cuentas en varias organizaciones (RQ26) */
+/** RQ58: por defecto las organizaciones nuevas requieren activacion (TENANT_APPROVAL=off la desactiva) */
+const requiresApproval = () => (process.env.TENANT_APPROVAL ?? 'on').toLowerCase() !== 'off';
+
 export async function upsertPerson(db: Db, documentId: string, fullName: string) {
   const doc = documentId.toUpperCase();
   const [found] = await db.query(`SELECT id FROM persons WHERE document = $1`, [doc]);
@@ -56,7 +59,7 @@ export async function assertNoAccountInTenant(db: Db, tenantId: number, personId
 
 export async function profile(db: Db, userId: number) {
   const [u] = await db.query(
-    `SELECT u.id, u.username, u.full_name, u.email, u.phone, u.role, u.permissions, u.consent_at, u.consent_version,
+    `SELECT u.id, u.username, u.full_name, u.email, u.phone, u.role, u.permissions, u.consent_at, u.consent_version, u.is_superadmin,
             p.document, t.id AS tenant_id, t.name AS tenant_name
        FROM users u JOIN persons p ON p.id = u.person_id JOIN tenants t ON t.id = u.tenant_id
       WHERE u.id = $1`,
@@ -80,6 +83,7 @@ export async function profile(db: Db, userId: number) {
     consentAt: u.consent_at,
     consentRequired: !u.consent_at || u.consent_version !== CONSENT_VERSION,
     tenant: { id: u.tenant_id, name: u.tenant_name },
+    isSuperadmin: !!u.is_superadmin,
     academies,
   };
 }
@@ -90,9 +94,14 @@ export function authRoutes(db: Db) {
 
   r.post('/auth/login', limiter, async (req, res) => {
     const b = parse(z.object({ username: z.string().trim().toLowerCase(), password: z.string() }), req.body);
-    const [u] = await db.query(`SELECT id, password_hash, active FROM users WHERE username = $1`, [b.username]);
+    const [u] = await db.query(
+      `SELECT u.id, u.password_hash, u.active, u.is_superadmin, t.status AS tenant_status FROM users u JOIN tenants t ON t.id = u.tenant_id WHERE u.username = $1`,
+      [b.username],
+    );
     if (!u || !(await checkPassword(b.password, u.password_hash))) throw new HttpError(401, 'Usuario o contraseña incorrectos', 'BAD_CREDENTIALS');
     if (!u.active) throw new HttpError(403, 'La cuenta está desactivada', 'INACTIVE');
+    const blocked = tenantBlock(u.tenant_status, !!u.is_superadmin); // RQ58
+    if (blocked) throw blocked;
     res.json({ token: signSession(u.id), user: await profile(db, u.id) });
   });
 
@@ -105,7 +114,8 @@ export function authRoutes(db: Db) {
     const userId = await db.tx(async (q) => {
       await assertUsernameFree(q, b.username);
       const personId = await upsertPerson(q, b.document, b.fullName);
-      const [t] = await q.query(`INSERT INTO tenants (name) VALUES ($1) RETURNING id`, [b.organization]);
+      // RQ58: la organizacion nueva queda pendiente hasta que el administrador general la active
+      const [t] = await q.query(`INSERT INTO tenants (name, status) VALUES ($1, $2) RETURNING id`, [b.organization, requiresApproval() ? 'pending' : 'active']);
       const [u] = await q.query(
         `INSERT INTO users (tenant_id, person_id, username, password_hash, full_name, email, phone, role, consent_at, consent_version)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'admin', now(), $8) RETURNING id`,
@@ -115,6 +125,9 @@ export function authRoutes(db: Db) {
       await q.query(`INSERT INTO sites (tenant_id, academy_id, name) VALUES ($1, $2, $3)`, [t.id, a.id, b.siteName]);
       return u.id as number;
     });
+    if (requiresApproval()) {
+      return res.status(201).json({ pending: true, message: 'Registro recibido. Podrás ingresar cuando el administrador general active tu organización.' });
+    }
     res.status(201).json({ token: signSession(userId), user: await profile(db, userId) });
   });
 
@@ -122,7 +135,10 @@ export function authRoutes(db: Db) {
   // una cuenta nueva ligada a la misma persona (RQ26)
   r.post('/auth/register-client', limiter, async (req, res) => {
     const b = parse(z.object({ ...personFields, joinCode: z.string().trim().toUpperCase().min(4), consent }), req.body);
-    const [academy] = await db.query(`SELECT id, tenant_id FROM academies WHERE join_code = $1 AND active = true`, [b.joinCode]);
+    const [academy] = await db.query(
+      `SELECT a.id, a.tenant_id FROM academies a JOIN tenants t ON t.id = a.tenant_id WHERE a.join_code = $1 AND a.active = true AND t.status = 'active'`,
+      [b.joinCode],
+    );
     if (!academy) throw new HttpError(404, 'Código de academia no válido', 'BAD_JOIN_CODE');
     const userId = await db.tx(async (q) => {
       await assertUsernameFree(q, b.username);

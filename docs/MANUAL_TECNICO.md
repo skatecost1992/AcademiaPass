@@ -146,6 +146,11 @@ Todos los reportes aceptan `from`, `to` (AAAA-MM-DD), `academyId`, `siteId` y `g
 | 50 Reportes por mes y por año (máx. 1 año) | `range()` rechaza > 366 días (`RANGE_TOO_LONG`); `RangePicker` Mes/Año |
 | 51 Clientes con más planes y asistencias | `GET /reports/top-clients`, pestaña *Top clientes* |
 | 52 No cancelar tomadas/vencidas; inasistencia descuenta del plan | `ALREADY_TAKEN`/`EXPIRED`; `settleMissedReservations` cada 5 min (`class_reservations.settled_at`, `penalty_membership_id`) |
+| 53 Plan con academias y sedes de acceso | `plan_academies`, `all_sites`/`plan_sites`; sección *Academias y sedes a las que da acceso* |
+| 54 Ver el profesor al agendar | `BookingForm`: tarjeta con el profesor de la clase (se puede cambiar para la sesión) |
+| 55 Vigencia en días (≤365) o meses (≤12) desde la fecha de ingreso | `plans.validity_months`; `ends_on` = ingreso + meses − 1 día o + días − 1 |
+| 56 Fecha límite de venta del plan | `plans.sale_until`; `POST /memberships` → `PLAN_SALE_CLOSED`; los ya asignados siguen hasta su vencimiento |
+| 58 Activación de nuevas organizaciones | `tenants.status` (pending/active/rejected), `users.is_superadmin` (usuario base `admin`), `/platform/tenants`, pantalla *Organizaciones*; `TENANT_APPROVAL=off` lo desactiva |
 | 38 No reservar en dos lugares a la vez | `assertNoOverlap`: cupos en clases y espacios del cliente que se crucen → `OVERLAP` |
 | 35 Cancelación por academia y sede | `academies.cancel_hours`, `sites.cancel_hours` (NULL = hereda); `siteCancelHours`: sede → academia → organización |
 

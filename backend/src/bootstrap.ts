@@ -17,15 +17,19 @@ import { upsertPerson } from './routes/auth.ts';
 export async function ensureAdmin(db: Db) {
   const username = (process.env.ADMIN_USERNAME ?? 'admin').toLowerCase();
   const [exists] = await db.query(`SELECT id FROM users WHERE username = $1`, [username]);
-  if (exists) return false;
+  if (exists) {
+    // RQ58: el usuario base es el administrador general (activa las organizaciones nuevas)
+    await db.query(`UPDATE users SET is_superadmin = true WHERE id = $1`, [exists.id]);
+    return false;
+  }
   const password = process.env.ADMIN_INITIAL_PASSWORD ?? 'Bogota.2027';
   const org = process.env.ADMIN_ORG_NAME ?? 'Mi organización';
   await db.tx(async (q) => {
     const personId = await upsertPerson(q, `ADMIN-${username}`, 'Administrador');
     const [t] = await q.query(`INSERT INTO tenants (name) VALUES ($1) RETURNING id`, [org]);
     await q.query(
-      `INSERT INTO users (tenant_id, person_id, username, password_hash, full_name, role, consent_at, consent_version)
-       VALUES ($1, $2, $3, $4, $5, 'admin', $6, $7)`,
+      `INSERT INTO users (tenant_id, person_id, username, password_hash, full_name, role, consent_at, consent_version, is_superadmin)
+       VALUES ($1, $2, $3, $4, $5, 'admin', $6, $7, true)`,
       [t.id, personId, username, await hashPassword(password), 'Administrador', new Date(), CONSENT_VERSION],
     );
     const [a] = await q.query(`INSERT INTO academies (tenant_id, name, join_code) VALUES ($1, $2, $3) RETURNING id`, [t.id, 'Academia principal', joinCode()]);

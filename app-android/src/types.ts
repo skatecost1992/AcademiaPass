@@ -15,6 +15,7 @@ export interface Profile {
   consentAt: string | null;
   consentRequired: boolean;
   tenant: { id: number; name: string };
+  isSuperadmin?: boolean; // RQ58
   academies: { id: number; name: string; join_code?: string }[];
 }
 
@@ -38,6 +39,7 @@ export interface Booking {
 export type PlanKind = 'classes' | 'reservations' | 'access' | 'mixed';
 export interface Plan {
   id: number; name: string; description: string | null; kind: PlanKind; units: number | null; validity_days: number; price: number;
+  validity_months: number | null; sale_until: string | null; // RQ55, RQ56
   all_sites: boolean; active: boolean; academies: { id: number; name: string }[]; sites: { id: number; name: string }[];
 }
 export interface Membership {

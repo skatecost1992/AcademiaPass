@@ -38,10 +38,13 @@ const at = (h: number, m = 0, dayOffset = 0) => {
 };
 
 try {
-  const admin = await call('POST', '/auth/register-admin', {
+  await call('POST', '/auth/register-admin', {
     username: 'admin.demo', password: PASS, fullName: 'Administrador Demo', document: 'DEMO-1', email: 'admin@demo.co',
     organization: 'Academias Demo', academyName: 'Danza Urbana', siteName: 'Sede Norte', consent: true,
-  });
+  }, '');
+  // RQ58: la organizacion queda pendiente; el demo la activa directamente en la base
+  await db.query(`UPDATE tenants SET status = 'active', reviewed_at = $1 WHERE name = 'Academias Demo'`, [new Date()]);
+  const admin = await call('POST', '/auth/login', { username: 'admin.demo', password: PASS }, '');
   token = admin.token;
   const danza = admin.user.academies[0];
   const [norte] = await call('GET', '/sites');

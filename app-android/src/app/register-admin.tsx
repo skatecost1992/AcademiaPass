@@ -1,7 +1,7 @@
 import { router } from 'expo-router';
 import React, { useState } from 'react';
 import { Text } from 'react-native';
-import { Button, Card, Checkbox, Field, Gap, Muted, Screen, Section, colors, errorText } from '../components/ui';
+import { Button, Card, Checkbox, Field, Gap, Muted, Screen, Section, colors, errorText, notify } from '../components/ui';
 import { post } from '../lib/api';
 import { useSession } from '../session';
 import type { Profile } from '../types';
@@ -19,10 +19,16 @@ export default function RegisterAdmin() {
     setError(null);
     setBusy(true);
     try {
-      const r = await post<{ token: string; user: Profile }>('/auth/register-admin', {
+      const r = await post<{ token?: string; user?: Profile; pending?: boolean; message?: string }>('/auth/register-admin', {
         ...f, email: f.email || null, phone: f.phone || null, username: f.username.trim().toLowerCase(), signupCode: f.signupCode || undefined, consent,
       });
-      await signIn(r.token, r.user);
+      if (r.pending || !r.token) {
+        // RQ58: el administrador general debe activar la organizacion antes del primer ingreso
+        notify('Registro recibido', r.message ?? 'Podrás ingresar cuando el administrador general active tu organización.');
+        router.replace('/login');
+        return;
+      }
+      await signIn(r.token, r.user!);
       router.replace('/home');
     } catch (e) {
       setError(errorText(e));

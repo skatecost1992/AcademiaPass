@@ -270,5 +270,14 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS booking_horizon_months int NOT NULL
 ALTER TABLE class_reservations ADD COLUMN IF NOT EXISTS settled_at timestamptz;
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_by int REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_at timestamptz;
+
+-- RQ55: vigencia del plan en meses (si no, en dias: validity_days); RQ56: fecha limite para venderlo
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS validity_months int;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS sale_until date;
+
+-- RQ58: una organizacion nueva queda pendiente hasta que el administrador general la active
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superadmin boolean NOT NULL DEFAULT false;
 ALTER TABLE class_reservations ADD COLUMN IF NOT EXISTS penalty_membership_id int REFERENCES memberships(id) ON DELETE SET NULL;
 `;

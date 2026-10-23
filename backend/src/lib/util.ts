@@ -51,6 +51,13 @@ export function localParts(d: Date) {
 /** Fecha de hoy 'YYYY-MM-DD' en la zona del negocio */
 export const todayLocal = () => localParts(new Date()).date;
 
+/** Suma meses calendario a 'YYYY-MM-DD' (31 ene + 1 mes = 28/29 feb) */
+export function addMonths(date: string, months: number) {
+  const [y, m, d] = date.split('-').map(Number);
+  const last = new Date(Date.UTC(y, m - 1 + months + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, m - 1 + months, Math.min(d, last))).toISOString().slice(0, 10);
+}
+
 export function addDays(date: string, days: number) {
   const d = new Date(`${date}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);

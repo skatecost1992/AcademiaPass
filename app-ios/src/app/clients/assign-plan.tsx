@@ -2,7 +2,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useState } from 'react';
 import { Button, Card, Chips, Field, InfoRow, Loader, Muted, Screen, Section, Toggle, errorText, notify, useLoad } from '../../components/ui';
 import { post } from '../../lib/api';
-import { PAY_METHODS, addDays, cap, fmtDate, isDate, money, planKindLabel, today } from '../../lib/format';
+import { PAY_METHODS, cap, fmtDate, isDate, money, planEnd, planKindLabel, today, validityText } from '../../lib/format';
 import { useSession } from '../../session';
 import type { Plan } from '../../types';
 
@@ -39,7 +39,7 @@ export default function AssignPlan() {
     <Screen title="Asignar plan">
       <Loader state={plans}>
         {(rows) => (
-          <Chips label="Plan" options={rows.filter((p) => p.active).map((p) => ({ value: p.id, label: `${p.name} · ${money(p.price)}` }))} value={planId ?? undefined}
+          <Chips label="Plan" options={rows.filter((p) => p.active && (!p.sale_until || p.sale_until >= today())).map((p) => ({ value: p.id, label: `${p.name} · ${money(p.price)}` }))} value={planId ?? undefined}
             onChange={(v) => { setPlanId(v); setPay((x) => ({ ...x, amount: String(rows.find((p) => p.id === v)?.price ?? '') })); }} />
         )}
       </Loader>
@@ -47,12 +47,12 @@ export default function AssignPlan() {
         <Card>
           <InfoRow label="Tipo" value={planKindLabel(plan.kind)} />
           <InfoRow label="Clases" value={plan.units == null ? 'Ilimitado' : String(plan.units)} />
-          <InfoRow label="Vigencia" value={`${fmtDate(startsOn)} – ${isDate(startsOn) ? fmtDate(addDays(startsOn, plan.validity_days - 1)) : '…'}`} />
+          <InfoRow label="Vigencia" value={`${validityText(plan)}: ${fmtDate(startsOn)} – ${isDate(startsOn) ? fmtDate(planEnd(startsOn, plan)) : '…'}`} />
           <InfoRow label="Academias" value={plan.academies.map((a) => a.name).join(', ')} />
           <InfoRow label="Sedes" value={plan.all_sites ? 'Todas' : plan.sites.map((s) => s.name).join(', ')} />
         </Card>
       ) : null}
-      <Field label="Inicia el (AAAA-MM-DD)" value={startsOn} onChangeText={setStartsOn} />
+      <Field label="Fecha de ingreso (AAAA-MM-DD)" value={startsOn} onChangeText={setStartsOn} hint="La vigencia del plan se cuenta desde esta fecha." />
       {can('payments') ? (
         <Section title="Pago">
           <Toggle label="Registrar el pago ahora" value={withPayment} onChange={setWithPayment} />

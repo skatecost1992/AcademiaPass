@@ -298,6 +298,20 @@ IF COL_LENGTH(N'dbo.bookings', N'cancelled_by') IS NULL
   ALTER TABLE dbo.bookings ADD cancelled_by INT NULL REFERENCES dbo.users(id);
 IF COL_LENGTH(N'dbo.bookings', N'cancelled_at') IS NULL
   ALTER TABLE dbo.bookings ADD cancelled_at DATETIMEOFFSET NULL;
+-- RQ55: vigencia del plan en meses (si no, en dias); RQ56: fecha limite para venderlo
+IF COL_LENGTH(N'dbo.plans', N'validity_months') IS NULL
+  ALTER TABLE dbo.plans ADD validity_months INT NULL;
+IF COL_LENGTH(N'dbo.plans', N'sale_until') IS NULL
+  ALTER TABLE dbo.plans ADD sale_until DATE NULL;
+
+-- RQ58: una organizacion nueva queda pendiente hasta que el administrador general la active
+IF COL_LENGTH(N'dbo.tenants', N'status') IS NULL
+  ALTER TABLE dbo.tenants ADD status NVARCHAR(10) NOT NULL CONSTRAINT df_tenants_status DEFAULT N'active';
+IF COL_LENGTH(N'dbo.tenants', N'reviewed_at') IS NULL
+  ALTER TABLE dbo.tenants ADD reviewed_at DATETIMEOFFSET NULL;
+IF COL_LENGTH(N'dbo.users', N'is_superadmin') IS NULL
+  ALTER TABLE dbo.users ADD is_superadmin BIT NOT NULL CONSTRAINT df_users_superadmin DEFAULT 0;
+
 IF COL_LENGTH(N'dbo.class_reservations', N'settled_at') IS NULL
   ALTER TABLE dbo.class_reservations ADD settled_at DATETIMEOFFSET NULL;
 IF COL_LENGTH(N'dbo.class_reservations', N'penalty_membership_id') IS NULL

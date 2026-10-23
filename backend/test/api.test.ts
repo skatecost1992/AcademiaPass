@@ -33,6 +33,17 @@ const ok = async (method: string, path: string, body?: unknown, token?: string) 
   return r.body;
 };
 
+/** RQ58: registra la organizacion, la activa el administrador general (usuario base) e inicia sesion */
+async function registerAdmin(body: Record<string, unknown>) {
+  const reg = await ok('POST', '/auth/register-admin', body);
+  assert.equal(reg.pending, true);
+  const root = (await ok('POST', '/auth/login', { username: 'admin', password: 'Bogota.2027' })).token;
+  const pending = await ok('GET', '/platform/tenants', undefined, root);
+  const tenant = pending.find((t: any) => t.name === body.organization);
+  await ok('POST', `/platform/tenants/${tenant.id}/approve`, {}, root);
+  return ok('POST', '/auth/login', { username: body.username, password: body.password });
+}
+
 /** Fecha ISO de hoy a la hora local indicada (America/Bogota, UTC-5) */
 const todayAt = (h: number, m = 0) => {
   const local = new Date(Date.now() - 5 * 3600_000).toISOString().slice(0, 10);
@@ -72,8 +83,25 @@ describe('AcademiaPass API', () => {
     assert.equal((await call('POST', '/auth/login', { username: 'admin', password: 'otra' })).status, 401);
   });
 
+  it('una organizacion nueva queda pendiente hasta que el administrador general la activa (RQ58)', async () => {
+    const reg = await ok('POST', '/auth/register-admin', { username: 'pendiente', password: 'Clave.12345', fullName: 'P', document: '6060', organization: 'Org Pendiente', academyName: 'Acad P', consent: true });
+    assert.equal(reg.pending, true);
+    assert.equal(reg.token, undefined);
+    assert.equal((await call('POST', '/auth/login', { username: 'pendiente', password: 'Clave.12345' })).body.code, 'TENANT_PENDING');
+    const root = (await ok('POST', '/auth/login', { username: 'admin', password: 'Bogota.2027' })).token;
+    assert.equal((await ok('GET', '/me', undefined, root)).isSuperadmin, true);
+    const list = await ok('GET', '/platform/tenants', undefined, root);
+    const t = list.find((x: any) => x.name === 'Org Pendiente');
+    assert.equal(t.admin.username, 'pendiente');
+    await ok('POST', `/platform/tenants/${t.id}/reject`, {}, root);
+    assert.equal((await call('POST', '/auth/login', { username: 'pendiente', password: 'Clave.12345' })).body.code, 'TENANT_REJECTED');
+    await ok('POST', `/platform/tenants/${t.id}/approve`, {}, root);
+    const ok2 = await ok('POST', '/auth/login', { username: 'pendiente', password: 'Clave.12345' });
+    assert.equal((await call('GET', '/platform/tenants', undefined, ok2.token)).status, 403, 'solo el administrador general');
+  });
+
   it('registra un administrador con su organizacion, academia y sede (RQ23)', async () => {
-    const r = await ok('POST', '/auth/register-admin', {
+    const r = await registerAdmin({
       username: 'admin.uno', password: 'Clave.12345', fullName: 'Ana Admin', document: '1001',
       organization: 'Org Uno', academyName: 'Danza Uno', consent: true,
     });
@@ -239,7 +267,7 @@ describe('AcademiaPass API', () => {
   });
 
   it('aisla organizaciones y permite una cuenta por organizacion para la misma persona (RQ25, RQ26)', async () => {
-    const other = await ok('POST', '/auth/register-admin', { username: 'admin.dos', password: 'Clave.12345', fullName: 'Beto', document: '5005', organization: 'Org Dos', academyName: 'Box', consent: true });
+    const other = await registerAdmin({ username: 'admin.dos', password: 'Clave.12345', fullName: 'Beto', document: '5005', organization: 'Org Dos', academyName: 'Box', consent: true });
     const t2 = other.token;
     assert.equal((await ok('GET', '/clients', undefined, t2)).length, 0);
     assert.equal((await call('GET', `/clients/${s.clientId}`, undefined, t2)).status, 404);
@@ -462,6 +490,22 @@ describe('AcademiaPass API', () => {
     const top = await ok('GET', '/reports/top-clients', undefined, s.admin);
     assert.equal(top.byPlans[0].full_name, 'Carlos Cliente');
     assert.ok(top.byAttendance.length >= 2 && top.byAttendance[0].visits >= top.byAttendance[1].visits);
+  });
+
+  it('vigencia del plan en meses o dias desde la fecha de ingreso y fecha limite de venta (RQ55, RQ56)', async () => {
+    assert.equal((await call('POST', '/plans', { name: 'Largo', kind: 'classes', units: 4, validityDays: 400, price: 1, academyIds: [s.academyA.id] }, s.admin)).status, 400);
+    assert.equal((await call('POST', '/plans', { name: 'Doble', kind: 'classes', units: 4, validityDays: 30, validityMonths: 1, price: 1, academyIds: [s.academyA.id] }, s.admin)).status, 400);
+    const anual = await ok('POST', '/plans', { name: 'Anual', kind: 'classes', units: 100, validityMonths: 12, price: 1, academyIds: [s.academyA.id] }, s.admin);
+    const m = await ok('POST', '/memberships', { clientId: s.clientId, planId: anual.id, startsOn: '2026-11-15' }, s.admin);
+    assert.equal(m.starts_on, '2026-11-15');
+    assert.equal(m.ends_on, '2027-11-14');
+    const dias = await ok('POST', '/plans', { name: 'Quincena', kind: 'classes', units: 10, validityDays: 15, price: 1, academyIds: [s.academyA.id] }, s.admin);
+    assert.equal((await ok('POST', '/memberships', { clientId: s.clientId, planId: dias.id, startsOn: '2026-11-01' }, s.admin)).ends_on, '2026-11-15');
+    // Venta cerrada: ya no se asigna a nadie, pero quien lo tiene lo conserva
+    await ok('PUT', `/plans/${dias.id}`, { name: 'Quincena', kind: 'classes', units: 10, validityDays: 15, price: 1, academyIds: [s.academyA.id], saleUntil: '2020-01-01' }, s.admin);
+    assert.equal((await call('POST', '/memberships', { clientId: s.clientId, planId: dias.id }, s.admin)).body.code, 'PLAN_SALE_CLOSED');
+    const still = (await ok('GET', `/clients/${s.clientId}`, undefined, s.admin)).memberships.filter((x: any) => x.plan_name === 'Quincena');
+    assert.equal(still.length, 1);
   });
 
   it('el cliente reserva un espacio y ve las reservas ajenas sin datos personales', async () => {

@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { ALL_PERMISSIONS, HttpError, hashPassword, requireAdmin, requirePerm } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { membershipsOf, planPlaces } from '../lib/memberships.ts';
-import { addDays, dateStr, dayBounds, id, idList, isoDateTime, optId, optText, own, ownAll, parse, range, text, todayLocal } from '../lib/util.ts';
+import { addDays, addMonths, dateStr, dayBounds, id, idList, isoDateTime, optId, optText, own, ownAll, parse, range, text, todayLocal } from '../lib/util.ts';
 import { assertNoAccountInTenant, assertUsernameFree, linkClientAcademies, upsertPerson } from './auth.ts';
 
 const username = z.string().trim().toLowerCase().regex(/^[a-z0-9._-]{4,40}$/, 'Usa 4 a 40 letras, números, punto, guion o guion bajo');
@@ -28,13 +28,17 @@ export function commerceRoutes(db: Db) {
     description: optText(),
     kind: z.enum(['classes', 'reservations', 'access', 'mixed']),
     units: z.coerce.number().int().positive().optional().nullable(),
-    validityDays: z.coerce.number().int().positive().max(3660),
+    // RQ55: vigencia en dias (hasta 365) o en meses (hasta 12); se cuenta desde la fecha de ingreso al asignarlo
+    validityDays: z.coerce.number().int().positive().max(365, 'La vigencia máxima es de 365 días').optional().nullable(),
+    validityMonths: z.coerce.number().int().positive().max(12, 'La vigencia máxima es de 12 meses').optional().nullable(),
+    saleUntil: dateStr.optional().nullable(), // RQ56: despues de esta fecha no se vende a clientes nuevos
     price: z.coerce.number().min(0),
     academyIds: z.array(id).min(1, 'Selecciona al menos una academia'),
     allSites: z.boolean().default(true),
     siteIds: z.array(id).default([]),
     active: z.boolean().default(true),
-  }).refine((p) => p.allSites || p.siteIds.length > 0, { message: 'Selecciona las sedes o marca "todas las sedes"', path: ['siteIds'] });
+  }).refine((p) => p.allSites || p.siteIds.length > 0, { message: 'Selecciona las sedes o marca "todas las sedes"', path: ['siteIds'] })
+    .refine((p) => !!p.validityDays !== !!p.validityMonths, { message: 'Indica la vigencia en días o en meses', path: ['validityDays'] });
 
   /** Planes con sus academias y sedes permitidas */
   const loadPlans = async (where: string, params: unknown[]) => {
@@ -56,10 +60,12 @@ export function commerceRoutes(db: Db) {
       if (bad.length) throw new HttpError(400, `La sede ${bad[0].name} no pertenece a las academias del plan`);
     }
     return db.tx(async (q) => {
-      const params = [b.name, b.description, b.kind, b.units ?? null, b.validityDays, b.price, b.allSites, b.active];
+      // validity_days queda como referencia (30 por mes) cuando la vigencia es en meses
+      const days = b.validityMonths ? Math.min(365, b.validityMonths * 30) : b.validityDays!;
+      const params = [b.name, b.description, b.kind, b.units ?? null, days, b.price, b.allSites, b.active, b.validityMonths ?? null, b.saleUntil ?? null];
       const [p] = planId
-        ? await q.query(`UPDATE plans SET name = $2, description = $3, kind = $4, units = $5, validity_days = $6, price = $7, all_sites = $8, active = $9 WHERE id = $1 RETURNING id`, [planId, ...params])
-        : await q.query(`INSERT INTO plans (tenant_id, name, description, kind, units, validity_days, price, all_sites, active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`, [tenantId, ...params]);
+        ? await q.query(`UPDATE plans SET name = $2, description = $3, kind = $4, units = $5, validity_days = $6, price = $7, all_sites = $8, active = $9, validity_months = $10, sale_until = $11 WHERE id = $1 RETURNING id`, [planId, ...params])
+        : await q.query(`INSERT INTO plans (tenant_id, name, description, kind, units, validity_days, price, all_sites, active, validity_months, sale_until) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`, [tenantId, ...params]);
       await q.query(`DELETE FROM plan_academies WHERE plan_id = $1`, [p.id]);
       await q.query(`DELETE FROM plan_sites WHERE plan_id = $1`, [p.id]);
       for (const aid of new Set(b.academyIds)) await q.query(`INSERT INTO plan_academies (plan_id, academy_id) VALUES ($1, $2)`, [p.id, aid]);
@@ -172,11 +178,16 @@ export function commerceRoutes(db: Db) {
     if (c.role !== 'client') throw new HttpError(400, 'Solo se asignan planes a clientes');
     const plan = await own(db, 'plans', b.planId, req.user.tenantId, 'Plan');
     if (!plan.active) throw new HttpError(409, 'El plan está inactivo');
+    // RQ56: pasada la fecha limite de venta no se asigna a nadie mas (los que ya lo tienen siguen hasta su vencimiento)
+    const saleUntil = plan.sale_until == null ? null : String(plan.sale_until instanceof Date ? plan.sale_until.toISOString() : plan.sale_until).slice(0, 10);
+    if (saleUntil && todayLocal() > saleUntil) throw new HttpError(409, `Este plan se podía adquirir hasta el ${saleUntil}`, 'PLAN_SALE_CLOSED');
     const startsOn = b.startsOn ?? todayLocal();
+    // RQ55: la vigencia se cuenta desde la fecha de ingreso registrada al asignar el plan
+    const endsOn = plan.validity_months ? addDays(addMonths(startsOn, plan.validity_months), -1) : addDays(startsOn, plan.validity_days - 1);
     const membershipId = await db.tx(async (q) => {
       const [m] = await q.query(
         `INSERT INTO memberships (tenant_id, client_id, plan_id, starts_on, ends_on, units_total, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-        [req.user.tenantId, c.id, plan.id, startsOn, addDays(startsOn, plan.validity_days - 1), plan.units, req.user.id],
+        [req.user.tenantId, c.id, plan.id, startsOn, endsOn, plan.units, req.user.id],
       );
       // Al adquirir el plan el cliente queda asociado a todas sus academias (RQ13)
       const planAcademies = await q.query(`SELECT academy_id FROM plan_academies WHERE plan_id = $1`, [plan.id]);

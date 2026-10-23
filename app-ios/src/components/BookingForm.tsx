@@ -133,7 +133,18 @@ export function BookingForm({ mode, initialKind = 'class' }: { mode: 'client' | 
           <Chips label="Clase" options={academyClasses.map((c) => ({ value: c.id, label: c.name }))} value={classId ?? undefined}
             onChange={(id) => { setClassId(id); setTeacherId(academyClasses.find((c) => c.id === id)?.teacher_id ?? null); }}
             hint={academyClasses.length ? undefined : 'Crea primero las clases de esta academia en "Clases y profesores".'} />
-          <Chips<number | null> label="Profesor" options={(teachers.data ?? []).filter((t) => t.active).map((t) => ({ value: t.id as number | null, label: `${t.full_name}${t.kind === 'external' ? ' (externo)' : ''}` }))} value={teacherId} onChange={setTeacherId} />
+          {/* RQ54: se ve el profesor que dara la clase (por defecto el de la clase; se puede cambiar para esta sesion) */}
+          {classId ? (
+            <Card style={{ backgroundColor: colors.primarySoft }}>
+              {(() => {
+                const t = (teachers.data ?? []).find((x) => x.id === teacherId);
+                return t
+                  ? <InfoRow label="Profesor que dará la clase" value={`${t.full_name} · ${t.kind === 'external' ? 'externo' : 'interno'}${t.specialty ? ` · ${t.specialty}` : ''}`} />
+                  : <Muted>Esta clase no tiene profesor asignado: elige uno abajo.</Muted>;
+              })()}
+            </Card>
+          ) : null}
+          <Chips<number | null> label="Cambiar profesor para esta sesión" options={(teachers.data ?? []).filter((t) => t.active).map((t) => ({ value: t.id as number | null, label: `${t.full_name}${t.kind === 'external' ? ' (externo)' : ''}` }))} value={teacherId} onChange={setTeacherId} />
         </>
       ) : null}
 

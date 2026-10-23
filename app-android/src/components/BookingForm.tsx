@@ -27,7 +27,9 @@ function SpaceInfo({ space, site }: { space: Space; site?: Site }) {
         <Muted style={{ fontSize: 12, marginTop: 4 }}>
           Atención: {day.map((h) => `${DAYS[h.day]} ${h.open}-${h.close}`).join(' · ')}
         </Muted>
-      ) : null}
+      ) : (
+        <Badge text="La sede no tiene horario de atención: no se puede agendar hasta configurarlo" tone="danger" />
+      )}
     </Card>
   );
 }

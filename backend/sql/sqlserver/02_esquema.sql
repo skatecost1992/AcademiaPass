@@ -266,8 +266,27 @@ IF COL_LENGTH(N'dbo.academies', N'cancel_hours') IS NULL
 IF COL_LENGTH(N'dbo.sites', N'cancel_hours') IS NULL
   ALTER TABLE dbo.sites ADD cancel_hours INT NULL;
 
+-- RQ37: solicitudes de autorizacion para ingresar con el aforo completo
+IF OBJECT_ID(N'dbo.capacity_requests', N'U') IS NULL
+CREATE TABLE dbo.capacity_requests (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  tenant_id INT NOT NULL REFERENCES dbo.tenants(id),
+  client_id INT NOT NULL REFERENCES dbo.users(id),
+  booking_id INT NULL REFERENCES dbo.bookings(id),
+  academy_id INT NOT NULL REFERENCES dbo.academies(id),
+  site_id INT NOT NULL REFERENCES dbo.sites(id),
+  status NVARCHAR(10) NOT NULL DEFAULT N'pending' CHECK (status IN (N'pending', N'approved', N'rejected')),
+  requested_by INT NULL REFERENCES dbo.users(id),
+  resolved_by INT NULL REFERENCES dbo.users(id),
+  resolved_at DATETIMEOFFSET NULL,
+  attendance_id INT NULL REFERENCES dbo.attendances(id),
+  created_at DATETIMEOFFSET NOT NULL DEFAULT SYSDATETIMEOFFSET()
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'capacity_requests_pending_idx')
+  CREATE INDEX capacity_requests_pending_idx ON dbo.capacity_requests (tenant_id, status);
+
 DECLARE @tablas INT = (SELECT COUNT(*) FROM sys.tables WHERE name IN
   (N'tenants', N'persons', N'academies', N'sites', N'users', N'spaces', N'photos', N'teachers', N'classes', N'bookings',
    N'plans', N'plan_academies', N'plan_sites', N'client_academies', N'memberships', N'payments', N'attendances',
-   N'class_reservations'));
-PRINT N'Esquema de AcademiaPass listo (' + CAST(@tablas AS NVARCHAR(5)) + N' de 18 tablas).';
+   N'class_reservations', N'capacity_requests'));
+PRINT N'Esquema de AcademiaPass listo (' + CAST(@tablas AS NVARCHAR(5)) + N' de 19 tablas).';

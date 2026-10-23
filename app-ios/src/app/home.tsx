@@ -11,6 +11,7 @@ interface Tile { label: string; icon: IconName; href: Href; perms?: Permission[]
 
 const STAFF_TILES: Tile[] = [
   { label: 'Escanear QR', icon: 'scan', href: '/scan', perms: ['attendance'] },
+  { label: 'Autorizaciones', icon: 'hand-left', href: '/authorizations', perms: ['override_capacity', 'attendance'] },
   { label: 'Agenda', icon: 'calendar', href: '/bookings', perms: ['classes', 'bookings'] },
   { label: 'Clientes', icon: 'people', href: '/clients', perms: ['clients', 'attendance', 'reports', 'payments'] },
   { label: 'Pagos', icon: 'cash', href: '/payments', perms: ['payments'] },

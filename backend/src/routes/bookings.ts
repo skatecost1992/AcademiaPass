@@ -12,7 +12,7 @@ import { HttpError, isStaffish } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { assertSpaceAvailable, assertWithinOpeningHours, type Space } from '../lib/capacity.ts';
 import { dateStr, dayBounds, id, idList, isoDateTime, optId, optText, own, parse, range, todayLocal } from '../lib/util.ts';
-import { assertCanCancel, assertClientPlan, myReservationIds } from './reservations.ts';
+import { assertCanCancel, assertClientPlan, assertNoOverlap, myReservationIds } from './reservations.ts';
 import { visibleAcademyIds } from './setup.ts';
 
 const WEEK_MS = 7 * 24 * 3600_000;
@@ -94,6 +94,7 @@ async function createBookings(db: Db, req: Request, b: z.infer<typeof bookingBod
       try {
         assertWithinOpeningHours(space.site_name, space.opening_hours, s, e);
         await assertSpaceAvailable(q, space, s, e, groupSize!);
+        if (b.clientId) await assertNoOverlap(q, b.clientId, s, e); // RQ38
       } catch (err) {
         if (err instanceof HttpError && b.repeatWeeks > 1) err.message = `Semana ${i + 1} (${s.toISOString().slice(0, 10)}): ${err.message}`;
         throw err;
@@ -173,6 +174,7 @@ export function bookingRoutes(db: Db) {
     if (!(await visibleAcademyIds(db, req)).includes(space.academy_id)) throw new HttpError(404, 'Espacio no encontrado', 'NOT_FOUND');
     if (new Date(b.startsAt) < new Date()) throw new HttpError(400, 'La reserva debe ser en el futuro');
     await assertClientPlan(db, req, space.academy_id, space.site_id, 'rental');
+    await assertNoOverlap(db, req.user.id, new Date(b.startsAt), new Date(b.endsAt));
     const rows = await createBookings(db, req, {
       ...b, kind: 'rental', clientId: req.user.id, title: `Reserva de ${req.user.fullName}`, repeatWeeks: 1, classId: null, teacherId: null,
     });

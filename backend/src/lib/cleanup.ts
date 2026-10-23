@@ -14,6 +14,7 @@ export async function deleteSpaces(q: Db, tenantId: number, spaceIds: number[]) 
   if (n > 0) throw new HttpError(409, 'Hay reservas con pagos registrados: desactiva en lugar de borrar', 'IN_USE');
   await q.query(`UPDATE attendances SET booking_id = NULL WHERE booking_id IN (SELECT id FROM bookings WHERE space_id IN ${list})`);
   await q.query(`DELETE FROM class_reservations WHERE booking_id IN (SELECT id FROM bookings WHERE space_id IN ${list})`);
+  await q.query(`DELETE FROM capacity_requests WHERE booking_id IN (SELECT id FROM bookings WHERE space_id IN ${list})`);
   await q.query(`UPDATE attendances SET space_id = NULL WHERE space_id IN ${list}`);
   await q.query(`DELETE FROM bookings WHERE space_id IN ${list}`);
   await q.query(`DELETE FROM photos WHERE tenant_id = $1 AND owner_type = 'space' AND owner_id IN ${list}`, [tenantId]);
@@ -27,6 +28,7 @@ export async function deleteSites(q: Db, tenantId: number, siteIds: number[]) {
   await deleteSpaces(q, tenantId, spaces.map((s) => s.id));
   await q.query(`DELETE FROM photos WHERE tenant_id = $1 AND owner_type = 'site' AND owner_id IN ${list}`, [tenantId]);
   await q.query(`DELETE FROM plan_sites WHERE site_id IN ${list}`);
+  await q.query(`DELETE FROM capacity_requests WHERE site_id IN ${list}`);
   await q.query(`UPDATE users SET home_site_id = NULL WHERE home_site_id IN ${list}`);
   await q.query(`DELETE FROM sites WHERE id IN ${list}`);
 }

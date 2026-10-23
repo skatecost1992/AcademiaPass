@@ -53,7 +53,8 @@ describe('AcademiaPass API', () => {
 
   it('informa el motor y la ubicacion de la base sin credenciales', async () => {
     const h = await ok('GET', '/health');
-    assert.equal(h.database.engine, 'PostgreSQL');
+    assert.equal(h.database.engine, process.env.DB_CLIENT === 'mssql' ? 'SQL Server' : 'PostgreSQL');
+    assert.ok(!JSON.stringify(h.database).toLowerCase().includes('password'));
     const neon = describePg('postgresql://dueno:clave-secreta@ep-demo-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require');
     assert.deepEqual(neon, { engine: 'PostgreSQL', provider: 'Neon', host: 'ep-demo-pooler.c-6.us-east-2.aws.neon.tech', database: 'neondb' });
     assert.ok(!JSON.stringify(neon).includes('clave-secreta') && !JSON.stringify(neon).includes('dueno'));
@@ -265,7 +266,12 @@ describe('AcademiaPass API', () => {
     assert.equal((await call('DELETE', `/academies/${s.academyB.id}`, undefined, s.admin)).body.code, 'IN_USE');
     // Academia nueva con sede, espacio, foto, clase y reserva: se borra completa
     const tmp = await ok('POST', '/academies', { name: 'Temporal' }, s.admin);
+    // RQ36: sin horario de atencion no se agenda; con horario si
     const site = await ok('POST', '/sites', { academyId: tmp.id, name: 'Sede temporal' }, s.admin);
+    const tmpSpace = await ok('POST', '/spaces', { siteId: site.id, name: 'Sin horario', maxCapacity: 5 }, s.admin);
+    const tmpClass = await ok('POST', '/classes', { academyId: tmp.id, name: 'Sin horario', defaultCapacity: 3 }, s.admin);
+    assert.equal((await call('POST', '/bookings', { spaceId: tmpSpace.id, kind: 'class', classId: tmpClass.id, startsAt: todayAt(12), endsAt: todayAt(13) }, s.admin)).body.code, 'NO_OPENING_HOURS');
+    await ok('PUT', `/sites/${site.id}`, { academyId: tmp.id, name: 'Sede temporal', openingHours: [0, 1, 2, 3, 4, 5, 6].map((day) => ({ day, open: '05:00', close: '23:00' })) }, s.admin);
     const space = await ok('POST', '/spaces', { siteId: site.id, name: 'Sala', maxCapacity: 5 }, s.admin);
     const pixel = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     await ok('POST', '/photos', { ownerType: 'site', ownerId: site.id, mime: 'image/png', data: pixel }, s.admin);
@@ -324,6 +330,41 @@ describe('AcademiaPass API', () => {
     await ok('POST', `/me/class-reservations/${mine.id}/cancel`, {}, s.client);
     await ok('PUT', '/settings', { cancelHours: 1, academies: [{ id: s.academyA.id, cancelHours: null }], sites: [{ id: s.siteA1.id, cancelHours: null }] }, s.admin);
     assert.equal((await ok('GET', '/me/class-reservations', undefined, s.client)).length, 0);
+  });
+
+  it('no permite reservas simultaneas y pide autorizacion con el aforo completo (RQ37, RQ38)', async () => {
+    const tomorrow = (h: number, m = 0) => new Date(new Date(todayAt(h, m)).getTime() + 24 * 3600_000).toISOString();
+    // RQ38: dos clases que se cruzan en el tiempo, en espacios distintos
+    const [c1] = await ok('POST', '/bookings', { spaceId: s.salon.id, kind: 'class', classId: s.salsa.id, startsAt: tomorrow(16), endsAt: tomorrow(17) }, s.admin);
+    const otherSpace = await ok('POST', '/spaces', { siteId: s.siteA1.id, name: 'Salón 2', maxCapacity: 10 }, s.admin);
+    const [c2] = await ok('POST', '/bookings', { spaceId: otherSpace.id, kind: 'class', classId: s.salsa.id, startsAt: tomorrow(16, 30), endsAt: tomorrow(17, 30) }, s.admin);
+    await ok('POST', '/me/class-reservations', { bookingId: c1.id }, s.client);
+    const clash = await call('POST', '/me/class-reservations', { bookingId: c2.id }, s.client);
+    assert.equal(clash.body.code, 'OVERLAP');
+    assert.ok(clash.body.error.includes('No puedes reservar dos espacios al mismo tiempo'));
+    // El personal tampoco puede reservarle un espacio que se cruce
+    const rent = await call('POST', '/bookings', { spaceId: otherSpace.id, kind: 'rental', clientId: s.clientId, title: 'Alquiler', startsAt: tomorrow(16, 15), endsAt: tomorrow(16, 45) }, s.admin);
+    assert.equal(rent.body.code, 'SPACE_TAKEN'); // el espacio ya esta ocupado por la clase c2
+    const freeSpace = await ok('POST', '/spaces', { siteId: s.siteA1.id, name: 'Salón 3', maxCapacity: 10 }, s.admin);
+    assert.equal((await call('POST', '/bookings', { spaceId: freeSpace.id, kind: 'rental', clientId: s.clientId, title: 'Alquiler', startsAt: tomorrow(16, 15), endsAt: tomorrow(16, 45) }, s.admin)).body.code, 'OVERLAP');
+
+    // RQ37: clase llena; quien escanea sin permiso solicita autorizacion y ve a quien contactar
+    const staff = (await ok('POST', '/auth/login', { username: 'portero', password: 'Clave.12345' })).token;
+    const full = await call('POST', '/attendance/scan', { clientId: (await ok('GET', '/clients?q=cupo.tres', undefined, s.admin))[0].id, academyId: s.academyA.id, siteId: s.siteA1.id, bookingId: s.session.id }, staff);
+    assert.equal(full.body.code, 'CAPACITY_FULL');
+    assert.ok(full.body.contacts.some((c: any) => c.role === 'admin'), 'muestra a quien contactar');
+    const reqBody = { clientId: full.body.client.id, academyId: s.academyA.id, siteId: s.siteA1.id, bookingId: s.session.id };
+    const request = await ok('POST', '/attendance/requests', reqBody, staff);
+    assert.equal(request.status, 'pending');
+    assert.equal((await ok('POST', '/attendance/requests', reqBody, staff)).id, request.id, 'no duplica solicitudes pendientes');
+    assert.equal((await call('POST', `/attendance/requests/${request.id}/approve`, {}, staff)).status, 403);
+    const pending = await ok('GET', '/attendance/requests', undefined, s.admin);
+    assert.ok(pending.some((x: any) => x.id === request.id));
+    const approved = await ok('POST', `/attendance/requests/${request.id}/approve`, {}, s.admin);
+    assert.equal(approved.overCapacity, true);
+    assert.equal((await call('POST', `/attendance/requests/${request.id}/approve`, {}, s.admin)).body.code, 'ALREADY_RESOLVED');
+    const history = await ok('GET', '/attendance/requests?status=approved', undefined, s.admin);
+    assert.equal(history.find((x: any) => x.id === request.id).resolved_by_name, 'Ana Admin');
   });
 
   it('el cliente reserva un espacio y ve las reservas ajenas sin datos personales', async () => {

@@ -24,11 +24,29 @@ interface ScanResult {
   code?: string;
   reasons?: string[];
   canOverride?: boolean;
+  contacts?: Contact[];
 }
+
+interface Contact { id: number; fullName: string; phone: string | null; email: string | null; role: string }
 
 type Who = { qrToken: string } | { clientId: number };
 
-function ResultCard({ r, onOverride, busy }: { r: ScanResult; onOverride: () => void; busy: boolean }) {
+/** Personas de la academia que pueden autorizar el ingreso (RQ37) */
+function ContactList({ contacts }: { contacts: Contact[] }) {
+  if (!contacts.length) return <Muted style={{ marginTop: 6 }}>No hay usuarios con permiso de aforo. Pide al administrador que asigne ese permiso.</Muted>;
+  return (
+    <View style={{ marginTop: 8 }}>
+      <Text style={[s.line, { fontWeight: '700' }]}>Comunícate con quien puede autorizar:</Text>
+      {contacts.map((c) => (
+        <Text key={c.id} style={[s.line, { fontSize: 13 }]}>
+          • {c.fullName}{c.role === 'admin' ? ' (administrador)' : ''}{c.phone ? ` · ${c.phone}` : ''}{c.email ? ` · ${c.email}` : ''}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+function ResultCard({ r, onOverride, onRequest, requested, busy }: { r: ScanResult; onOverride: () => void; onRequest: () => void; requested: boolean; busy: boolean }) {
   const tone = r.ok ? (r.overCapacity ? colors.accent : colors.success) : colors.danger;
   return (
     <View style={[s.result, { borderColor: tone, backgroundColor: r.ok ? (r.overCapacity ? colors.accentSoft : colors.successSoft) : colors.dangerSoft }]}>
@@ -56,7 +74,14 @@ function ResultCard({ r, onOverride, busy }: { r: ScanResult; onOverride: () => 
           {r.code === 'CAPACITY_FULL' ? (
             r.canOverride
               ? <Button label="Permitir ingreso fuera del aforo" variant="danger" icon="alert-circle-outline" onPress={onOverride} loading={busy} style={{ marginTop: 10 }} />
-              : <Muted style={{ marginTop: 6 }}>Solo un usuario con permiso de aforo puede autorizar este ingreso.</Muted>
+              : (
+                <>
+                  <ContactList contacts={r.contacts ?? []} />
+                  {requested
+                    ? <Badge text="Solicitud enviada: queda pendiente en Autorizaciones" tone="accent" />
+                    : <Button label="Solicitar autorización" icon="hand-left-outline" onPress={onRequest} loading={busy} style={{ marginTop: 10 }} />}
+                </>
+              )
           ) : null}
         </View>
       )}
@@ -73,6 +98,7 @@ export default function Scan() {
   const [query, setQuery] = useState('');
   const [result, setResult] = useState<ScanResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [requested, setRequested] = useState(false);
   const last = useRef<Who | null>(null);
   const locked = useRef(false);
   const [permission, requestPermission] = useCameraPermissions();
@@ -92,7 +118,7 @@ export default function Scan() {
       void sessions.reload();
     } catch (e) {
       const data = e instanceof ApiError ? e.data : null;
-      setResult({ ok: false, error: e instanceof Error ? e.message : String(e), code: data?.code, reasons: data?.reasons, canOverride: data?.canOverride, client: data?.client });
+      setResult({ ok: false, error: e instanceof Error ? e.message : String(e), code: data?.code, reasons: data?.reasons, canOverride: data?.canOverride, contacts: data?.contacts, client: data?.client });
     } finally {
       setBusy(false);
     }
@@ -104,7 +130,22 @@ export default function Scan() {
     void register({ qrToken: data }).finally(() => { locked.current = false; });
   };
 
+  // RQ37: deja la solicitud pendiente para quien puede autorizar el ingreso
+  const requestAuthorization = async () => {
+    if (!result?.client || !bookingId) return;
+    setBusy(true);
+    try {
+      await post('/attendance/requests', { clientId: result.client.id, academyId, siteId, bookingId });
+      setRequested(true);
+    } catch (e) {
+      setResult({ ...result, error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const next = () => {
+    setRequested(false);
     setResult(null);
     setQuery('');
   };
@@ -133,7 +174,7 @@ export default function Scan() {
           <Chips options={[{ value: 'camera' as const, label: 'Escanear QR' }, { value: 'manual' as const, label: 'Buscar por documento' }]} value={mode} onChange={(m) => { setMode(m); setResult(null); }} />
           {result ? (
             <>
-              <ResultCard r={result} busy={busy} onOverride={() => last.current && register(last.current, true)} />
+              <ResultCard r={result} busy={busy} requested={requested} onRequest={requestAuthorization} onOverride={() => last.current && register(last.current, true)} />
               <Button label="Registrar otro" icon="scan" onPress={next} />
             </>
           ) : mode === 'camera' ? (

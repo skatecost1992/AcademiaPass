@@ -130,6 +130,9 @@ Todos los reportes aceptan `from`, `to` (AAAA-MM-DD), `academyId`, `siteId` y `g
 | 32 Cancelar hasta el límite del admin | `tenants.cancel_hours`, `GET/PUT /settings`, pantalla *Reglas de reserva*; `assertCanCancel` |
 | 33 Info e imágenes del espacio al elegir sede y salón | `SpaceInfo` en `BookingForm` (descripción, fotos, aforo, horario) |
 | 34 Pagos asociados a un cliente y a un plan | `POST /payments` exige `membershipId` (de él salen cliente y plan); `bookingId` opcional y del mismo cliente |
+| 36 Agendar solo en horarios habilitados | `assertWithinOpeningHours`: sede sin horario → `NO_OPENING_HOURS`; fuera de franja → `OUT_OF_HOURS` con el horario del día |
+| 37 Aforo completo: comunicar a quien autoriza | `CAPACITY_FULL` trae `contacts`; `capacity_requests`, `POST /attendance/requests`, aprobar/rechazar (`override_capacity`), pantalla *Autorizaciones* |
+| 38 No reservar en dos lugares a la vez | `assertNoOverlap`: cupos en clases y espacios del cliente que se crucen → `OVERLAP` |
 | 35 Cancelación por academia y sede | `academies.cancel_hours`, `sites.cancel_hours` (NULL = hereda); `siteCancelHours`: sede → academia → organización |
 
 ## 7. Pruebas

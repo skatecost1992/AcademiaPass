@@ -58,10 +58,22 @@ export async function assertSpaceAvailable(db: Db, space: Space, start: Date, en
 }
 
 /** Si la sede tiene horarios configurados, la reserva debe caber en una franja del mismo dia */
+const DAY_NAMES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+
+/**
+ * RQ36: solo se agenda dentro de los horarios habilitados de la sede. Si la sede aun no tiene horario de
+ * atencion configurado, no se puede agendar nada en ella.
+ */
 export function assertWithinOpeningHours(siteName: string, hours: OpeningSlot[], start: Date, end: Date) {
-  if (!hours || hours.length === 0) return;
+  if (!hours || hours.length === 0) {
+    throw new HttpError(409, `La sede ${siteName} no tiene horario de atención configurado. Configúralo en Sedes y espacios antes de agendar.`, 'NO_OPENING_HOURS');
+  }
   const s = localParts(start);
   const e = localParts(new Date(end.getTime() - 1)); // un fin a las 21:00 en punto cuenta como 20:59
   const ok = s.date === e.date && hours.some((h) => h.day === s.day && h.open <= s.time && e.time < h.close);
-  if (!ok) throw new HttpError(409, `El horario está fuera de la atención de la sede ${siteName}`, 'OUT_OF_HOURS');
+  if (!ok) {
+    const today = hours.filter((h) => h.day === s.day).map((h) => `${h.open}-${h.close}`);
+    const detail = today.length ? `el ${DAY_NAMES[s.day]} atiende de ${today.join(', ')}` : `el ${DAY_NAMES[s.day]} no atiende`;
+    throw new HttpError(409, `Fuera del horario habilitado de la sede ${siteName}: ${detail}.`, 'OUT_OF_HOURS');
+  }
 }

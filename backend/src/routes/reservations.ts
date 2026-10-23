@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { HttpError, requireAdmin } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { KINDS_FOR_CONTEXT, membershipsOf, pickMembership } from '../lib/memberships.ts';
-import { id, idList, parse } from '../lib/util.ts';
+import { id, idList, localParts, parse } from '../lib/util.ts';
 import { visibleAcademyIds } from './setup.ts';
 
 export async function cancelHours(db: Db, tenantId: number): Promise<number> {
@@ -49,6 +49,27 @@ export async function assertClientPlan(db: Db, req: Request, academyId: number, 
     throw new HttpError(409, `Necesitas un plan vigente que incluya esta academia y sede para ${what}.`, 'NO_PLAN', { reasons: picked.reasons });
   }
   return picked.membership;
+}
+
+/**
+ * RQ38: una persona no puede estar en dos lugares a la vez. Revisa sus reservas de espacio y sus cupos en clases
+ * confirmados que se crucen con [start, end).
+ */
+export async function assertNoOverlap(db: Db, clientId: number, start: Date, end: Date, ignoreBookingId?: number) {
+  const [clash] = await db.query(
+    `SELECT b.title, b.starts_at, b.ends_at, s.name AS site_name, sp.name AS space_name
+       FROM bookings b JOIN sites s ON s.id = b.site_id JOIN spaces sp ON sp.id = b.space_id
+      WHERE b.status = 'confirmed' AND b.starts_at < $3 AND b.ends_at > $2 AND b.id <> $4
+        AND (b.client_id = $1 OR EXISTS (SELECT 1 FROM class_reservations cr WHERE cr.booking_id = b.id AND cr.client_id = $1 AND cr.status = 'confirmed'))
+      ORDER BY b.starts_at`,
+    [clientId, start, end, ignoreBookingId ?? 0],
+  );
+  if (clash) {
+    const hm = (d: Date | string) => localParts(new Date(d)).time;
+    throw new HttpError(409,
+      `No puedes reservar dos espacios al mismo tiempo: ya tienes "${clash.title}" en ${clash.site_name} · ${clash.space_name} de ${hm(clash.starts_at)} a ${hm(clash.ends_at)}.`,
+      'OVERLAP', { clash: { title: clash.title, startsAt: clash.starts_at, endsAt: clash.ends_at, site: clash.site_name, space: clash.space_name } });
+  }
 }
 
 const RESERVATION_SELECT = `
@@ -127,6 +148,7 @@ export function reservationRoutes(db: Db) {
     if (b.status !== 'confirmed' || !b.space_active || !(b.max_capacity > 0)) throw new HttpError(409, 'Esta clase no está disponible para reservas', 'NOT_AVAILABLE');
     if (new Date(b.starts_at) <= new Date()) throw new HttpError(409, 'La clase ya empezó', 'NOT_AVAILABLE');
     await assertClientPlan(db, req, b.academy_id, b.site_id, 'class');
+    await assertNoOverlap(db, req.user.id, new Date(b.starts_at), new Date(b.ends_at), b.id);
 
     const reservationId = await db.tx(async (q) => {
       const [dup] = await q.query(`SELECT id FROM class_reservations WHERE booking_id = $1 AND client_id = $2 AND status = 'confirmed'`, [b.id, req.user.id]);

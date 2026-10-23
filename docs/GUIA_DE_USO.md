@@ -26,7 +26,12 @@ cliente (o busca por documento). Resultado:
 
 - Verde: ingreso registrado y clases restantes del plan que se descontó.
 - Rojo: sin plan vigente para esa academia/sede (muestra el motivo) o QR vencido.
-- Aforo completo: solo quien tenga el permiso puede pulsar *Permitir ingreso fuera del aforo*.
+- Aforo completo: si tienes el permiso de aforo, pulsa *Permitir ingreso fuera del aforo*. Si no, la app
+  muestra a quién contactar (nombre, celular, correo) y el botón *Solicitar autorización*. La solicitud queda
+  en **Autorizaciones**, donde quien tiene el permiso la aprueba (se registra el ingreso) o la rechaza.
+
+Las clases y reservas solo se agendan dentro del **horario de atención** de la sede; una sede sin horario
+configurado no admite agenda. Un cliente no puede tener dos reservas que se crucen en el tiempo.
 
 ## Cliente
 

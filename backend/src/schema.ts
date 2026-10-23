@@ -242,4 +242,21 @@ ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_check;
 -- RQ35: limite de cancelacion por academia y por sede (NULL = hereda de la academia / de la organizacion)
 ALTER TABLE academies ADD COLUMN IF NOT EXISTS cancel_hours int;
 ALTER TABLE sites ADD COLUMN IF NOT EXISTS cancel_hours int;
+
+-- RQ37: solicitudes de autorizacion para ingresar con el aforo completo
+CREATE TABLE IF NOT EXISTS capacity_requests (
+  id serial PRIMARY KEY,
+  tenant_id int NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  client_id int NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  booking_id int REFERENCES bookings(id) ON DELETE SET NULL,
+  academy_id int NOT NULL REFERENCES academies(id) ON DELETE CASCADE,
+  site_id int NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  requested_by int REFERENCES users(id) ON DELETE SET NULL,
+  resolved_by int REFERENCES users(id) ON DELETE SET NULL,
+  resolved_at timestamptz,
+  attendance_id int REFERENCES attendances(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS capacity_requests_pending_idx ON capacity_requests (tenant_id, status);
 `;

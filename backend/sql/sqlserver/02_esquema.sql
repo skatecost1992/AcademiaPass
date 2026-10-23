@@ -392,6 +392,17 @@ CREATE TABLE dbo.schedule_request_items (
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'schedule_requests_tenant_idx')
   CREATE INDEX schedule_requests_tenant_idx ON dbo.schedule_requests (tenant_id, status);
 
+-- RQ69: usuario del profesor, anticipacion para que el profesor cancele y motivo de cancelacion
+IF COL_LENGTH(N'dbo.users', N'teacher_id') IS NULL
+  ALTER TABLE dbo.users ADD teacher_id INT NULL REFERENCES dbo.teachers(id);
+-- EXEC: el esquema corre en un solo lote y el indice usa la columna recien creada
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'users_teacher_once')
+  EXEC(N'CREATE UNIQUE INDEX users_teacher_once ON dbo.users (teacher_id) WHERE teacher_id IS NOT NULL');
+IF COL_LENGTH(N'dbo.tenants', N'teacher_cancel_hours') IS NULL
+  ALTER TABLE dbo.tenants ADD teacher_cancel_hours INT NOT NULL CONSTRAINT df_tenants_teacher_cancel DEFAULT 24;
+IF COL_LENGTH(N'dbo.bookings', N'cancel_reason') IS NULL
+  ALTER TABLE dbo.bookings ADD cancel_reason NVARCHAR(30) NULL;
+
 DECLARE @tablas INT = (SELECT COUNT(*) FROM sys.tables WHERE name IN
   (N'tenants', N'persons', N'academies', N'sites', N'users', N'spaces', N'photos', N'teachers', N'classes', N'bookings',
    N'plans', N'plan_academies', N'plan_sites', N'client_academies', N'memberships', N'payments', N'attendances',

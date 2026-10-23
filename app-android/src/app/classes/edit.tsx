@@ -6,6 +6,7 @@ import { Calendar } from '../../components/Calendar';
 import { Button, Card, Chips, Field, Loading, Muted, Screen, Section, Toggle, confirm, errorText, notify, useLoad } from '../../components/ui';
 import { ApiError, post, put, qs } from '../../lib/api';
 import { DAYS, addDays, isDate, isTime, toIso, today, ymd } from '../../lib/format';
+import { useSession } from '../../session';
 import type { Academy, ClassDef, Clash, SessionConflict, Site, Space, Teacher } from '../../types';
 
 const weekdayOf = (date: string) => new Date(`${date}T12:00:00`).getDay();
@@ -21,6 +22,7 @@ const plusHour = (hm: string, max: string) => {
  */
 export default function ClassEdit() {
   const { id } = useLocalSearchParams<{ id?: string }>();
+  const own = useSession().user?.teacher?.id ?? null; // RQ69: el profesor solo crea clases que dicta el
   const academies = useLoad<Academy[]>('/academies');
   const teachers = useLoad<Teacher[]>('/teachers');
   const classes = useLoad<ClassDef[]>(id ? '/classes' : null);
@@ -54,7 +56,7 @@ export default function ClassEdit() {
   const space = spaces.data?.find((s) => s.id === f.spaceId);
   const limit = space ? (space.allow_multi_group && space.capacity_per_group ? space.capacity_per_group : space.max_capacity) : null;
   // RQ62: solo profesores asignados a la sede elegida
-  const siteTeachers = (teachers.data ?? []).filter((t) => t.active && t.sites.some((s) => s.id === f.siteId));
+  const siteTeachers = (teachers.data ?? []).filter((t) => t.active && t.sites.some((s) => s.id === f.siteId) && (own == null || t.id === own));
   const tooBig = limit != null && Number(f.defaultCapacity) > limit;
 
   const schedule = !id && sch.enabled;

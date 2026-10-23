@@ -4,13 +4,13 @@
  *    dias de anticipacion se avisa el vencimiento del plan.
  *  - Cada usuario, cliente o personal, decide cuales recibe y a que correo.
  */
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { HttpError, requirePerm } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { compose, mailConfigured, mailProvider, mailSender, sendMail } from '../lib/mailer.ts';
 import { DAY_BEFORE_H, HOURS_BEFORE_H, dispatchNotifications } from '../lib/notifications.ts';
-import { parse } from '../lib/util.ts';
+import { id, parse } from '../lib/util.ts';
 
 const flags = { dayBefore: z.boolean(), hoursBefore: z.boolean(), plan: z.boolean() };
 
@@ -48,6 +48,16 @@ export function notificationRoutes(db: Db) {
     res.json(await orgSettings(req.user.tenantId));
   });
 
+  /** Usuario de la organizacion que puede gestionar quien pide: el admin a todos; con permiso de clientes, a clientes */
+  const managedUser = async (req: Request) => {
+    const [u] = await db.query(`SELECT id, role FROM users WHERE id = $1 AND tenant_id = $2`, [parse(id, req.params.id), req.user.tenantId]);
+    if (!u) throw new HttpError(404, 'Usuario no encontrado', 'NOT_FOUND');
+    if (req.user.role !== 'admin' && !(u.role === 'client' && req.user.permissions.includes('clients'))) {
+      throw new HttpError(403, 'No tienes permiso para esta acción', 'FORBIDDEN');
+    }
+    return u as { id: number; role: string };
+  };
+
   const mine = async (userId: number, tenantId: number) => {
     const [u] = await db.query(`SELECT email, notify_day_before, notify_hours_before, notify_plan FROM users WHERE id = $1`, [userId]);
     return {
@@ -74,6 +84,18 @@ export function notificationRoutes(db: Db) {
       [req.user.id, b.dayBefore, b.hoursBefore, b.plan],
     );
     res.json(await mine(req.user.id, req.user.tenantId));
+  });
+
+  // RQ70: el administrador (o el personal con permiso de clientes, para clientes) define los correos de otro usuario
+  r.get('/users/:id/notifications', async (req, res) => {
+    const u = await managedUser(req);
+    res.json(await mine(u.id, req.user.tenantId));
+  });
+  r.put('/users/:id/notifications', async (req, res) => {
+    const u = await managedUser(req);
+    const b = parse(z.object(flags), req.body);
+    await db.query(`UPDATE users SET notify_day_before = $2, notify_hours_before = $3, notify_plan = $4 WHERE id = $1`, [u.id, b.dayBefore, b.hoursBefore, b.plan]);
+    res.json(await mine(u.id, req.user.tenantId));
   });
 
   // Ultimos correos de la organizacion, para revisar que salieron

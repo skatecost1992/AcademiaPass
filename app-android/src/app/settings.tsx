@@ -7,6 +7,7 @@ import { get, put } from '../lib/api';
 interface Settings {
   cancelHours: number;
   bookingHorizonMonths: number;
+  teacherCancelHours: number; // RQ69
   academies: { id: number; name: string; cancelHours: number | null }[];
   sites: { id: number; name: string; academyId: number; academyName: string; cancelHours: number | null }[];
 }
@@ -57,6 +58,7 @@ export default function SettingsScreen() {
       await put('/settings', {
         cancelHours: s.cancelHours,
         bookingHorizonMonths: s.bookingHorizonMonths,
+        teacherCancelHours: s.teacherCancelHours,
         academies: s.academies.map((a) => ({ id: a.id, cancelHours: a.cancelHours })),
         sites: s.sites.map((x) => ({ id: x.id, cancelHours: x.cancelHours })),
       });
@@ -84,6 +86,16 @@ export default function SettingsScreen() {
           <Muted style={{ marginBottom: 8 }}>Límite superior para reservar o agendar, contado desde hoy.</Muted>
           <Chips options={[1, 2, 3, 6, 12].map((m) => ({ value: m, label: m === 1 ? '1 mes' : `${m} meses` }))}
             value={s.bookingHorizonMonths} onChange={(v) => setS({ ...s, bookingHorizonMonths: v })} />
+        </Card>
+      </Section>
+
+      <Section title="Cancelación por el profesor">
+        <Card>
+          <Muted style={{ marginBottom: 8 }}>
+            Hasta cuándo puede un profesor con usuario cancelar su propia sesión. La cancelación cuenta como clase a la que no
+            pudo asistir y se avisa a los clientes con cupo.
+          </Muted>
+          <HoursPicker value={s.teacherCancelHours} onChange={(v) => setS({ ...s, teacherCancelHours: v ?? 24 })} />
         </Card>
       </Section>
 

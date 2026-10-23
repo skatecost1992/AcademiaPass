@@ -22,9 +22,16 @@
 6. **Planes**: tipo (clases, reservas, acceso/asesorías, mixto), número de clases o ilimitado, vigencia,
    precio, academias a las que da acceso y sedes permitidas.
 7. **Clientes**: crear cliente, *Asignar plan* (con el pago), registrar pagos, ver su reporte unificado.
-8. **Usuarios**: crea el personal y marca sus permisos (registrar asistencias, horarios, clases, reservas,
+8. **Profesores con usuario (RQ69)**: al crear o editar un profesor, el administrador puede darle un **usuario**
+   para entrar a la app (usuario, contraseña y documento) con permisos de profesor: crear sus clases, separar
+   espacios, registrar asistencia y, si se quiere, configurar las reglas. El profesor solo ve y gestiona **sus**
+   clases: las programa, registra la asistencia escaneando el QR en su clase y puede **cancelarlas** hasta la
+   anticipación que fija la academia en **Reglas de reserva** (*Cancelación por el profesor*). Sus clientes con
+   cupo reciben un correo. En **Mis clases dictadas** ve las clases dictadas, el aforo que tuvo y a cuántas no pudo
+   asistir; el administrador ve el mismo reporte de cada profesor.
+9. **Usuarios**: crea el personal y marca sus permisos (registrar asistencias, horarios, clases, reservas,
    reportes, permitir ingresos fuera del aforo…).
-9. **Reportes**: Resumen (agrupa todo y se descarga en PDF), Asistencia, Aforo y Pagos; por semana o mes,
+10. **Reportes**: Resumen (agrupa todo y se descarga en PDF), Asistencia, Aforo y Pagos; por semana o mes,
    academia y sede.
 
 ## Recepción: registrar ingresos

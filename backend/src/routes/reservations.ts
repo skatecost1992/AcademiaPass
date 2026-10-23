@@ -136,6 +136,8 @@ export function reservationRoutes(db: Db) {
   const loadSettings = async (tenantId: number) => ({
     cancelHours: await cancelHours(db, tenantId),
     bookingHorizonMonths: (await db.query(`SELECT booking_horizon_months FROM tenants WHERE id = $1`, [tenantId]))[0]?.booking_horizon_months ?? 3,
+    // RQ69: horas antes del inicio hasta las que un profesor puede cancelar su sesion
+    teacherCancelHours: (await db.query(`SELECT teacher_cancel_hours FROM tenants WHERE id = $1`, [tenantId]))[0]?.teacher_cancel_hours ?? 24,
     academies: (await db.query(`SELECT id, name, cancel_hours FROM academies WHERE tenant_id = $1 ORDER BY name`, [tenantId]))
       .map((a) => ({ id: a.id, name: a.name, cancelHours: a.cancel_hours })),
     sites: (await db.query(
@@ -156,6 +158,7 @@ export function reservationRoutes(db: Db) {
     const b = parse(z.object({
       cancelHours: hours.optional(),
       bookingHorizonMonths: z.coerce.number().int().min(1).max(24).optional(), // RQ47
+      teacherCancelHours: hours.optional(), // RQ69
       academies: z.array(z.object({ id, cancelHours: hours.nullable() })).default([]),
       sites: z.array(z.object({ id, cancelHours: hours.nullable() })).default([]),
     }), req.body);
@@ -163,6 +166,7 @@ export function reservationRoutes(db: Db) {
     await db.tx(async (q) => {
       if (b.cancelHours != null) await q.query(`UPDATE tenants SET cancel_hours = $2 WHERE id = $1`, [t, b.cancelHours]);
       if (b.bookingHorizonMonths != null) await q.query(`UPDATE tenants SET booking_horizon_months = $2 WHERE id = $1`, [t, b.bookingHorizonMonths]);
+      if (b.teacherCancelHours != null) await q.query(`UPDATE tenants SET teacher_cancel_hours = $2 WHERE id = $1`, [t, b.teacherCancelHours]);
       for (const a of b.academies) {
         const n = await q.query(`UPDATE academies SET cancel_hours = $3 WHERE id = $1 AND tenant_id = $2 RETURNING id`, [a.id, t, a.cancelHours]);
         if (!n.length) throw new HttpError(404, 'Academia no encontrada', 'NOT_FOUND');

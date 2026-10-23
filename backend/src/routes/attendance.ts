@@ -10,7 +10,7 @@
  */
 import { Router } from 'express';
 import { z } from 'zod';
-import { type AuthUser, HttpError, effectivePermissions, requireAdmin, requirePerm, verifyQr } from '../auth.ts';
+import { type AuthUser, HttpError, assertOwnTeacher, effectivePermissions, requireAdmin, requirePerm, verifyQr } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { KINDS_FOR_CONTEXT, membershipsOf, pickMembership, type MembershipView } from '../lib/memberships.ts';
 import { dateStr, dayBounds, id, localParts, optId, own, parse, range } from '../lib/util.ts';
@@ -66,8 +66,11 @@ async function performScan(db: Db, user: AuthUser, b: ScanInput) {
     // ---------------------------------------------------------------- Contexto: clase, reserva o ingreso general
     let booking: any = null;
     let context: keyof typeof KINDS_FOR_CONTEXT = 'general';
+    // RQ69: el profesor registra la asistencia solo de sus propias clases
+    if (user.teacherId != null && !b.bookingId) throw new HttpError(403, 'Como profesor solo registras la asistencia de tus clases: elige la clase', 'NOT_YOUR_CLASS');
     if (b.bookingId) {
       booking = await own(db, 'bookings', b.bookingId, tenantId, 'Clase o reserva');
+      assertOwnTeacher(user, booking.teacher_id, 'la clase');
       if (booking.site_id !== site.id) throw new HttpError(400, 'La clase o reserva es de otra sede');
       if (booking.status !== 'confirmed') throw new HttpError(409, 'La clase o reserva está cancelada');
       // RQ39: solo el mismo dia, desde 1 hora antes del inicio hasta la hora de finalizacion

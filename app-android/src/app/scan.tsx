@@ -90,7 +90,8 @@ function ResultCard({ r, onOverride, onRequest, requested, busy }: { r: ScanResu
 }
 
 export default function Scan() {
-  const { can } = useSession();
+  const { can, user } = useSession();
+  const own = user?.teacher?.id ?? null; // RQ69
   const [academyId, setAcademyId] = useState<number | null>(null);
   const [siteId, setSiteId] = useState<number | null>(null);
   const [bookingId, setBookingId] = useState<number | null>(null);
@@ -160,8 +161,8 @@ export default function Scan() {
         <Section title="2. Clase o reserva de hoy">
           <Chips<number | null>
             options={[
-              { value: null, label: 'Ingreso general' },
-              ...(sessions.data ?? []).map((b) => ({ value: b.id as number | null, label: `${fmtTime(b.starts_at)} ${b.title} (${b.attendees}/${b.group_size})` })),
+              ...(own == null ? [{ value: null, label: 'Ingreso general' }] : []),
+              ...(sessions.data ?? []).filter((b) => own == null || b.teacher_id === own).map((b) => ({ value: b.id as number | null, label: `${fmtTime(b.starts_at)} ${b.title} (${b.attendees}/${b.group_size})` })),
             ]}
             value={bookingId}
             onChange={(v) => { setBookingId(v); setResult(null); }}

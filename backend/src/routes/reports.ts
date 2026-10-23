@@ -306,6 +306,60 @@ export function reportRoutes(db: Db) {
     res.json(await classesReport(db, req.user.tenantId, f, clientId));
   });
 
+  /**
+   * RQ69: clases del profesor en el rango: dictadas (con su cupo, reservas, asistentes y % de aforo), a las que no
+   * pudo asistir (canceladas por el o marcadas asi) y canceladas por otro motivo. El profesor ve solo las suyas; el
+   * personal con permiso de reportes elige el profesor.
+   */
+  r.get('/reports/teacher', async (req, res) => {
+    const f = readFilters(req.query);
+    let teacherId = parse(optId, req.query.teacherId) ?? null;
+    if (req.user.teacherId != null) teacherId = req.user.teacherId;
+    else if (!req.user.permissions.includes('reports')) throw new HttpError(403, 'No tienes permiso para esta acción', 'FORBIDDEN');
+    if (!teacherId) throw new HttpError(400, 'teacherId: Elige el profesor');
+    const teacher = await own(db, 'teachers', teacherId, req.user.tenantId, 'Profesor');
+    const [start, end] = dayBounds(f.from, f.to);
+    const rows = await db.query(
+      `SELECT b.id, b.title, b.starts_at, b.ends_at, b.status, b.cancel_reason, b.group_size, b.kind,
+              s.name AS site_name, sp.name AS space_name, a.name AS academy_name, sp.max_capacity,
+              (SELECT count(*) FROM attendances att WHERE att.booking_id = b.id) AS attendees,
+              (SELECT count(*) FROM class_reservations cr WHERE cr.booking_id = b.id AND cr.status = 'confirmed') AS reserved
+         FROM bookings b JOIN sites s ON s.id = b.site_id JOIN spaces sp ON sp.id = b.space_id JOIN academies a ON a.id = s.academy_id
+        WHERE b.tenant_id = $1 AND b.teacher_id = $2 AND b.starts_at >= $3 AND b.starts_at < $4
+          AND ($5::int IS NULL OR s.academy_id = $5) AND ($6::int IS NULL OR b.site_id = $6)
+        ORDER BY b.starts_at DESC`,
+      [req.user.tenantId, teacherId, start, end, f.academyId ?? null, f.siteId ?? null],
+    );
+    const now = Date.now();
+    const sessions = rows.map((b) => {
+      const attendees = Number(b.attendees);
+      const state = b.status === 'cancelled' ? (b.cancel_reason === 'teacher_absent' ? 'absent' : 'cancelled')
+        : new Date(b.ends_at).getTime() < now ? 'taught' : 'upcoming';
+      return {
+        id: b.id, title: b.title, kind: b.kind, starts_at: b.starts_at, ends_at: b.ends_at, academy_name: b.academy_name, site_name: b.site_name,
+        space_name: b.space_name, capacity: b.group_size, max_capacity: b.max_capacity, reserved: Number(b.reserved), attendees,
+        occupancy: b.group_size ? Math.round((attendees / b.group_size) * 100) : 0, state,
+      };
+    });
+    const taught = sessions.filter((x) => x.state === 'taught');
+    const attendeesTotal = taught.reduce((a, x) => a + x.attendees, 0);
+    const capacityTotal = taught.reduce((a, x) => a + x.capacity, 0);
+    res.json({
+      teacher: { id: teacher.id, full_name: teacher.full_name, kind: teacher.kind },
+      from: f.from, to: f.to,
+      summary: {
+        taught: taught.length,
+        absent: sessions.filter((x) => x.state === 'absent').length,
+        cancelled: sessions.filter((x) => x.state === 'cancelled').length,
+        upcoming: sessions.filter((x) => x.state === 'upcoming').length,
+        attendees: attendeesTotal,
+        avgAttendees: taught.length ? Math.round((attendeesTotal / taught.length) * 10) / 10 : 0,
+        occupancy: capacityTotal ? Math.round((attendeesTotal / capacityTotal) * 100) : 0,
+      },
+      sessions,
+    });
+  });
+
   r.get('/reports/top-clients', requirePerm('reports'), async (req, res) => {
     res.json(await topClientsReport(db, req.user.tenantId, readFilters(req.query)));
   });

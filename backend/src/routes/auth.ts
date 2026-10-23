@@ -57,14 +57,19 @@ export async function assertNoAccountInTenant(db: Db, tenantId: number, personId
   if (u) throw new HttpError(409, 'Esta persona ya tiene una cuenta en esta organización. Inicia sesión con ella.', 'ALREADY_REGISTERED');
 }
 
-export async function profile(db: Db, userId: number) {
+export async function profile(db: Db, userId: number, actingTenantId: number | null = null) {
   const [u] = await db.query(
     `SELECT u.id, u.username, u.full_name, u.email, u.phone, u.role, u.permissions, u.consent_at, u.consent_version, u.is_superadmin,
-            p.document, t.id AS tenant_id, t.name AS tenant_name
-       FROM users u JOIN persons p ON p.id = u.person_id JOIN tenants t ON t.id = u.tenant_id
+            u.teacher_id, te.full_name AS teacher_name, p.document, t.id AS tenant_id, t.name AS tenant_name
+       FROM users u JOIN persons p ON p.id = u.person_id JOIN tenants t ON t.id = u.tenant_id LEFT JOIN teachers te ON te.id = u.teacher_id
       WHERE u.id = $1`,
     [userId],
   );
+  // RQ70: el administrador general dentro de otra organizacion se ve como su administrador
+  if (actingTenantId != null) {
+    const [t] = await db.query(`SELECT id, name FROM tenants WHERE id = $1`, [actingTenantId]);
+    Object.assign(u, { role: 'admin', tenant_id: t.id, tenant_name: t.name, teacher_id: null });
+  }
   const academies = u.role === 'client'
     ? await db.query(
         `SELECT a.id, a.name FROM client_academies ca JOIN academies a ON a.id = ca.academy_id WHERE ca.client_id = $1 ORDER BY a.name`,
@@ -84,6 +89,8 @@ export async function profile(db: Db, userId: number) {
     consentRequired: !u.consent_at || u.consent_version !== CONSENT_VERSION,
     tenant: { id: u.tenant_id, name: u.tenant_name },
     isSuperadmin: !!u.is_superadmin,
+    teacher: u.teacher_id ? { id: u.teacher_id as number, name: u.teacher_name as string } : null, // RQ69
+    actingAs: actingTenantId != null ? { tenantId: actingTenantId, name: u.tenant_name as string } : null, // RQ70
     academies,
   };
 }
@@ -158,20 +165,20 @@ export function authRoutes(db: Db) {
   const auth = authenticate(db);
 
   r.get('/me', auth, async (req, res) => {
-    res.json(await profile(db, req.user.id));
+    res.json(await profile(db, req.user.id, req.user.actingTenantId));
   });
 
   r.put('/me', auth, async (req, res) => {
     const b = parse(z.object({ fullName: text(120), email: z.string().trim().email('Correo inválido').optional().nullable(), phone: optText(30) }), req.body);
     await db.query(`UPDATE users SET full_name = $2, email = $3, phone = $4 WHERE id = $1`, [req.user.id, b.fullName, b.email ?? null, b.phone]);
-    res.json(await profile(db, req.user.id));
+    res.json(await profile(db, req.user.id, req.user.actingTenantId));
   });
 
   // Aceptacion del tratamiento de datos (clientes creados por el admin la aceptan al primer ingreso)
   r.post('/me/consent', auth, async (req, res) => {
     parse(z.object({ consent }), req.body);
     await db.query(`UPDATE users SET consent_at = now(), consent_version = $2 WHERE id = $1`, [req.user.id, CONSENT_VERSION]);
-    res.json(await profile(db, req.user.id));
+    res.json(await profile(db, req.user.id, req.user.actingTenantId));
   });
 
   r.post('/me/password', auth, async (req, res) => {
@@ -192,7 +199,7 @@ export function authRoutes(db: Db) {
       throw new HttpError(409, 'Esa academia pertenece a otra organización: crea una cuenta nueva con tu mismo documento desde "Crear cuenta".', 'OTHER_TENANT');
     }
     await linkClientAcademies(db, req.user.id, [a.id]);
-    res.json(await profile(db, req.user.id));
+    res.json(await profile(db, req.user.id, req.user.actingTenantId));
   });
 
   r.get('/me/qr', auth, async (req, res) => {

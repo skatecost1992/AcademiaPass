@@ -343,4 +343,11 @@ CREATE TABLE IF NOT EXISTS schedule_request_items (
   new_booking_id int REFERENCES bookings(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS schedule_requests_tenant_idx ON schedule_requests (tenant_id, status);
+
+-- RQ69: el profesor puede tener un usuario (personal ligado al profesor) que solo gestiona sus clases; cancela sus
+-- sesiones hasta teacher_cancel_hours antes y las que cancela cuentan como clases a las que no pudo asistir
+ALTER TABLE users ADD COLUMN IF NOT EXISTS teacher_id int REFERENCES teachers(id) ON DELETE SET NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS users_teacher_once ON users (teacher_id) WHERE teacher_id IS NOT NULL;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS teacher_cancel_hours int NOT NULL DEFAULT 24;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancel_reason text;
 `;

@@ -52,6 +52,8 @@ export interface AuthUser {
   username: string;
   consentAt: string | null;
   isSuperadmin: boolean; // RQ58: administrador general (usuario base)
+  teacherId: number | null; // RQ69: usuario de un profesor: solo gestiona sus propias clases
+  actingTenantId: number | null; // RQ70: el administrador general esta administrando otra organizacion
 }
 
 /** RQ58: mensaje si la organizacion aun no esta activa; el administrador general siempre puede entrar */
@@ -82,6 +84,11 @@ export const checkPassword = (p: string, hash: string) => bcrypt.compare(p, hash
 
 export function signSession(userId: number) {
   return jwt.sign({ sub: String(userId), typ: 'session' }, secret(), { expiresIn: '30d' });
+}
+
+/** RQ70: sesion del administrador general como administrador de otra organizacion (dura 8 horas) */
+export function signActingSession(userId: number, tenantId: number) {
+  return jwt.sign({ sub: String(userId), typ: 'session', act: tenantId }, secret(), { expiresIn: '8h' });
 }
 
 /** Token del QR del cliente: vence en minutos para que una captura de pantalla no sirva despues (RQ7) */
@@ -130,16 +137,18 @@ export function authenticate(db: Db) {
     const token = header.startsWith('Bearer ') ? header.slice(7) : '';
     if (!token) throw new HttpError(401, 'Inicia sesión para continuar', 'UNAUTHENTICATED');
     let userId: number;
+    let act: number | null = null;
     try {
       const p = jwt.verify(token, secret()) as jwt.JwtPayload;
       if (p.typ !== 'session') throw new Error();
       userId = Number(p.sub);
+      act = p.act ? Number(p.act) : null;
     } catch {
       throw new HttpError(401, 'La sesión venció. Vuelve a iniciar sesión.', 'UNAUTHENTICATED');
     }
     // Se lee el usuario en cada peticion para que un cambio de permisos o una desactivacion aplique de inmediato
     const [u] = await db.query(
-      `SELECT u.id, u.tenant_id, u.person_id, u.role, u.permissions, u.full_name, u.username, u.consent_at, u.active, u.is_superadmin, t.status AS tenant_status
+      `SELECT u.id, u.tenant_id, u.person_id, u.role, u.permissions, u.full_name, u.username, u.consent_at, u.active, u.is_superadmin, u.teacher_id, t.status AS tenant_status
          FROM users u JOIN tenants t ON t.id = u.tenant_id WHERE u.id = $1`,
       [userId],
     );
@@ -156,7 +165,16 @@ export function authenticate(db: Db) {
       username: u.username,
       consentAt: u.consent_at,
       isSuperadmin: !!u.is_superadmin,
+      teacherId: u.teacher_id ?? null,
+      actingTenantId: null,
     };
+    // RQ70: el administrador general administra otra organizacion con todos los permisos de su administrador
+    if (act != null) {
+      if (!u.is_superadmin) throw new HttpError(401, 'La sesión no es válida', 'UNAUTHENTICATED');
+      const [t] = await db.query(`SELECT id FROM tenants WHERE id = $1`, [act]);
+      if (!t) throw new HttpError(401, 'La organización ya no existe', 'UNAUTHENTICATED');
+      Object.assign(req.user, { tenantId: act, role: 'admin', permissions: ALL_PERMISSIONS, teacherId: null, actingTenantId: act });
+    }
     next();
   };
 }
@@ -177,3 +195,14 @@ export function requireAdmin(req: Request, _res: Response, next: NextFunction) {
 }
 
 export const isStaffish = (u: AuthUser) => u.role === 'admin' || u.role === 'staff';
+
+/** RQ69: permisos que se le pueden dar al usuario de un profesor (por defecto los tres primeros) */
+export const TEACHER_PERMISSIONS = ['classes', 'bookings', 'attendance', 'booking_rules'] as const satisfies readonly Permission[];
+export const DEFAULT_TEACHER_PERMISSIONS: Permission[] = ['classes', 'bookings', 'attendance'];
+
+/** RQ69: el usuario de un profesor solo actua sobre sus propias clases y sesiones */
+export function assertOwnTeacher(user: AuthUser, teacherId: number | null | undefined, what = 'esta clase') {
+  if (user.teacherId != null && teacherId !== user.teacherId) {
+    throw new HttpError(403, `Como profesor solo puedes gestionar tus propias clases (${what} es de otro profesor)`, 'NOT_YOUR_CLASS');
+  }
+}

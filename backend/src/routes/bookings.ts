@@ -8,7 +8,8 @@
  */
 import { Router, type Request } from 'express';
 import { z } from 'zod';
-import { HttpError, isStaffish } from '../auth.ts';
+import { HttpError, assertOwnTeacher, isStaffish } from '../auth.ts';
+import { compose, sendMail } from '../lib/mailer.ts';
 import type { Db } from '../db.ts';
 import { assertSpaceAvailable, assertWithinOpeningHours, type Space } from '../lib/capacity.ts';
 import { assertWithinHorizon, freeSlots } from '../lib/scheduling.ts';
@@ -220,6 +221,27 @@ export async function createBookings(db: Db, req: Request, b: z.infer<typeof boo
   return (await createBookingsDetailed(db, req, b)).rows;
 }
 
+/** RQ69: horas antes del inicio hasta las que un profesor puede cancelar su sesion */
+export async function teacherCancelHours(db: Db, tenantId: number): Promise<number> {
+  const [t] = await db.query(`SELECT teacher_cancel_hours FROM tenants WHERE id = $1`, [tenantId]);
+  return t?.teacher_cancel_hours ?? 24;
+}
+
+/** Avisa por correo a los clientes con cupo reservado que la clase se cancelo */
+async function notifyCancelledClass(db: Db, bookingId: number) {
+  const rows = await db.query(
+    `SELECT u.email, u.full_name, b.title, b.starts_at, s.name AS site_name FROM class_reservations cr JOIN users u ON u.id = cr.client_id
+       JOIN bookings b ON b.id = cr.booking_id JOIN sites s ON s.id = b.site_id
+      WHERE cr.booking_id = $1 AND cr.status = 'confirmed' AND u.email IS NOT NULL`,
+    [bookingId],
+  );
+  for (const c of rows) {
+    const when = `${localParts(new Date(c.starts_at)).date} ${localParts(new Date(c.starts_at)).time}`;
+    const body = compose([{ p: `Hola ${c.full_name},` }, { p: `La clase ${c.title} del ${when} en ${c.site_name} fue cancelada. No se descuenta de tu plan.` }]);
+    await sendMail({ to: c.email, subject: `Clase cancelada: ${c.title}`, ...body }).catch((e) => console.error('[correo] clase cancelada:', e));
+  }
+}
+
 export function bookingRoutes(db: Db) {
   const r = Router();
 
@@ -273,6 +295,12 @@ export function bookingRoutes(db: Db) {
     const b = parse(bookingBody, req.body);
     const needed = b.kind === 'class' ? 'classes' : 'bookings';
     if (!req.user.permissions.includes(needed)) throw new HttpError(403, 'No tienes permiso para esta acción', 'FORBIDDEN');
+    // RQ69: el profesor programa sus clases y separa espacios a su nombre
+    if (req.user.teacherId != null) {
+      if (b.kind === 'class') assertOwnTeacher(req.user, (await own(db, 'classes', b.classId ?? 0, req.user.tenantId, 'Clase')).teacher_id);
+      if (b.clientId) throw new HttpError(403, 'Como profesor solo separas espacios para tus clases', 'FORBIDDEN');
+      b.teacherId = req.user.teacherId;
+    }
     res.status(201).json(await createBookings(db, req, b));
   });
 
@@ -303,7 +331,21 @@ export function bookingRoutes(db: Db) {
       if (new Date(b.ends_at) < new Date()) throw new HttpError(409, 'Esta reserva ya venció: no se puede cancelar', 'EXPIRED');
       await assertCanCancel(db, req.user.tenantId, b.starts_at, b.site_id);
     }
-    await db.query(`UPDATE bookings SET status = 'cancelled', cancelled_by = $2, cancelled_at = $3 WHERE id = $1`, [b.id, req.user.id, new Date()]);
+    // RQ69: el profesor cancela sus sesiones con la anticipacion que define la organizacion; cuentan como clases a
+    // las que no pudo asistir. El personal puede marcar el mismo motivo al cancelar por el.
+    const body = parse(z.object({ reason: z.enum(['teacher_absent', 'other']).optional() }), req.body ?? {});
+    let reason: string | null = body.reason ?? null;
+    if (req.user.teacherId != null && !isOwner) {
+      assertOwnTeacher(req.user, b.teacher_id, 'la sesión');
+      if (b.status !== 'confirmed') throw new HttpError(409, 'La sesión ya está cancelada', 'ALREADY_CANCELLED');
+      const hours = await teacherCancelHours(db, req.user.tenantId);
+      if (Date.now() > new Date(b.starts_at).getTime() - hours * 3600_000) {
+        throw new HttpError(409, `Los profesores solo pueden cancelar ${hours === 0 ? 'antes de que empiece la clase' : hours % 24 === 0 ? `hasta ${hours / 24} día(s) antes` : `hasta ${hours} hora(s) antes`}. Comunícate con la academia.`, 'CANCEL_DEADLINE', { cancelHours: hours });
+      }
+      reason = 'teacher_absent';
+    }
+    await db.query(`UPDATE bookings SET status = 'cancelled', cancelled_by = $2, cancelled_at = $3, cancel_reason = $4 WHERE id = $1`, [b.id, req.user.id, new Date(), reason]);
+    if (b.kind === 'class' && new Date(b.starts_at) > new Date()) void notifyCancelledClass(db, b.id);
     res.json({ ok: true });
   });
 

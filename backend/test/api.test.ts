@@ -748,4 +748,89 @@ describe('AcademiaPass API', () => {
       setMailSender(null);
     }
   });
+  it('el profesor tiene usuario, gestiona solo sus clases, cancela con anticipacion y ve su reporte (RQ69)', async () => {
+    const account = { username: 'ana.profe', password: 'Profe.2026x', document: '7770001' };
+    // Solo el administrador crea el usuario del profesor
+    const t = await ok('POST', '/teachers', { fullName: 'Ana Profe', kind: 'internal', email: 'ana@example.com', siteIds: [s.siteA1.id], account }, s.admin);
+    assert.equal(t.account.username, 'ana.profe');
+    assert.deepEqual(t.account.permissions, ['classes', 'bookings', 'attendance']);
+    const ana = (await ok('POST', '/auth/login', { username: 'ana.profe', password: 'Profe.2026x' })).token;
+    const me = await ok('GET', '/me', undefined, ana);
+    assert.equal(me.teacher.id, t.id);
+    assert.equal(me.role, 'staff');
+
+    // Solo sus clases: no crea clases de otro profesor, no edita las ajenas ni crea profesores
+    const base69 = { academyId: s.academyA.id, spaceId: s.salon.id, defaultCapacity: 3 };
+    assert.equal((await call('POST', '/classes', { ...base69, teacherId: s.teacherIn.id, name: 'Ajena' }, ana)).body.code, 'NOT_YOUR_CLASS');
+    assert.equal((await call('PUT', `/classes/${s.salsa.id}`, { academyId: s.academyA.id, teacherId: t.id, spaceId: s.salon.id, name: 'Salsa', defaultCapacity: 2 }, ana)).body.code, 'NOT_YOUR_CLASS');
+    assert.equal((await call('POST', '/teachers', { fullName: 'Otro', kind: 'internal', siteIds: [s.siteA1.id] }, ana)).status, 403);
+    const far = new Date(new Date(todayAt(20)).getTime() + 10 * 86400_000);
+    const near = new Date(new Date(todayAt(20)).getTime() + 1 * 86400_000);
+    const mine = await ok('POST', '/classes', { ...base69, teacherId: t.id, name: 'Funcional de Ana', schedule: { startsAt: far.toISOString(), endsAt: new Date(far.getTime() + 3600_000).toISOString() } }, ana);
+    assert.equal(mine.sessions.length, 1);
+    const [soon] = await ok('POST', '/bookings', { kind: 'class', classId: mine.id, spaceId: s.salon.id, startsAt: near.toISOString(), endsAt: new Date(near.getTime() + 3600_000).toISOString() }, ana);
+    // Separa espacios a su nombre
+    const rental = await ok('POST', '/bookings', { kind: 'rental', spaceId: s.salon.id, title: 'Ensayo de Ana', teacherId: s.teacherIn.id, startsAt: new Date(far.getTime() + 2 * 3600_000).toISOString(), endsAt: new Date(far.getTime() + 3 * 3600_000).toISOString(), groupSize: 2 }, ana);
+    assert.equal(rental[0].teacher_id, t.id, 'la reserva queda a nombre del profesor');
+    // La asistencia solo en sus clases
+    assert.equal((await call('POST', '/attendance/scan', { clientId: s.clientId, academyId: s.academyA.id, siteId: s.siteA1.id }, ana)).body.code, 'NOT_YOUR_CLASS');
+    assert.equal((await call('POST', '/attendance/scan', { clientId: s.clientId, academyId: s.academyA.id, siteId: s.siteA1.id, bookingId: s.session.id }, ana)).body.code, 'NOT_YOUR_CLASS');
+
+    // Cancela sus sesiones con la anticipacion definida (48 h); las ajenas no
+    await ok('PUT', '/settings', { teacherCancelHours: 48 }, s.admin);
+    assert.equal((await ok('GET', '/settings', undefined, s.admin)).teacherCancelHours, 48);
+    assert.equal((await call('POST', `/bookings/${soon.id}/cancel`, {}, ana)).body.code, 'CANCEL_DEADLINE');
+    assert.equal((await call('POST', `/bookings/${s.session.id}/cancel`, {}, ana)).body.code, 'NOT_YOUR_CLASS');
+    await ok('POST', `/bookings/${mine.sessions[0].id}/cancel`, {}, ana);
+    // El personal cancela por el y marca que el profesor no pudo asistir
+    await ok('POST', `/bookings/${soon.id}/cancel`, { reason: 'other' }, s.admin);
+
+    // Reporte del profesor: solo el suyo
+    const from = new Date(Date.now() + OFFSET_MS).toISOString().slice(0, 10);
+    const to = new Date(far.getTime() + OFFSET_MS + 86400_000).toISOString().slice(0, 10);
+    const rep = await ok('GET', `/reports/teacher?from=${from}&to=${to}&teacherId=${s.teacherIn.id}`, undefined, ana);
+    assert.equal(rep.teacher.id, t.id, 'el profesor solo ve su reporte');
+    assert.equal(rep.summary.absent, 1);
+    assert.equal(rep.summary.cancelled, 1);
+    assert.ok(rep.sessions.every((x: any) => 'occupancy' in x && 'attendees' in x && 'capacity' in x));
+    assert.equal((await call('GET', `/reports/teacher?from=${from}&to=${to}`, undefined, s.admin)).status, 400);
+    const pedro = await ok('GET', `/reports/teacher?from=${from}&to=${to}&teacherId=${s.teacherIn.id}`, undefined, s.admin);
+    assert.equal(pedro.teacher.full_name, 'Pedro Interno');
+    assert.equal((await call('GET', `/reports/teacher?teacherId=${t.id}`, undefined, s.client)).status, 403);
+
+    // Desactivar al profesor desactiva su usuario
+    await ok('PUT', `/teachers/${t.id}`, { fullName: 'Ana Profe', kind: 'internal', siteIds: [s.siteA1.id], active: false }, s.admin);
+    assert.equal((await call('GET', '/me', undefined, ana)).status, 401);
+  });
+  it('el administrador general administra cualquier organizacion: usuarios, clientes y sus parametros (RQ70)', async () => {
+    const root = (await ok('POST', '/auth/login', { username: 'admin', password: 'Bogota.2027' })).token;
+    const org = (await ok('GET', '/me', undefined, s.admin)).tenant;
+    // Solo el administrador general entra a otras organizaciones
+    assert.equal((await call('POST', `/platform/tenants/${org.id}/enter`, {}, s.admin)).status, 403);
+    const entered = await ok('POST', `/platform/tenants/${org.id}/enter`, {}, root);
+    const acting = entered.token;
+    assert.equal(entered.user.actingAs.tenantId, org.id);
+    assert.equal(entered.user.role, 'admin');
+    const me = await ok('GET', '/me', undefined, acting);
+    assert.equal(me.tenant.id, org.id);
+    assert.ok(me.permissions.includes('notifications') && me.permissions.includes('booking_rules'));
+    assert.equal((await call('POST', `/platform/tenants/${org.id}/enter`, {}, acting)).body.code, 'ALREADY_ACTING');
+
+    // Ve y gestiona los usuarios y clientes de esa organizacion
+    const staff = await ok('GET', '/users', undefined, acting);
+    assert.ok(staff.some((u: any) => u.username === 'admin.uno'));
+    const clients = await ok('GET', '/clients?q=Carlos', undefined, acting);
+    assert.equal(clients[0].id, s.clientId);
+    const prefs = await ok('PUT', `/users/${s.clientId}/notifications`, { dayBefore: false, hoursBefore: true, plan: true }, acting);
+    assert.equal(prefs.dayBefore, false);
+    assert.equal((await ok('GET', '/me/notifications', undefined, s.client)).dayBefore, false, 'el cliente ve el cambio');
+    await ok('PUT', '/settings', { teacherCancelHours: 12 }, acting);
+    assert.equal((await ok('GET', '/settings', undefined, s.admin)).teacherCancelHours, 12);
+    // Con permiso de clientes se cambian los de un cliente, no los del personal
+    const portero = (await ok('POST', '/auth/login', { username: 'portero', password: 'Clave.12345' })).token;
+    const adminUno = staff.find((u: any) => u.username === 'admin.uno');
+    assert.equal((await call('PUT', `/users/${adminUno.id}/notifications`, { dayBefore: true, hoursBefore: true, plan: true }, portero)).status, 403);
+    // Su propia sesion sigue en su organizacion
+    assert.equal((await ok('GET', '/me', undefined, root)).actingAs, null);
+  });
 });

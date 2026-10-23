@@ -7,7 +7,7 @@ import { fmtDate, planKindLabel, unitsText } from '../lib/format';
 import { useSession } from '../session';
 import type { Permission, UnifiedReport } from '../types';
 
-interface Tile { label: string; icon: IconName; href: Href; perms?: Permission[]; admin?: boolean; superadmin?: boolean }
+interface Tile { label: string; icon: IconName; href: Href; perms?: Permission[]; admin?: boolean; superadmin?: boolean; teacher?: boolean }
 
 const STAFF_TILES: Tile[] = [
   { label: 'Escanear QR', icon: 'scan', href: '/scan', perms: ['attendance'] },
@@ -15,7 +15,9 @@ const STAFF_TILES: Tile[] = [
   { label: 'Agenda', icon: 'calendar', href: '/bookings', perms: ['classes', 'bookings'] },
   { label: 'Clientes', icon: 'people', href: '/clients', perms: ['clients', 'attendance', 'reports', 'payments'] },
   { label: 'Pagos', icon: 'cash', href: '/payments', perms: ['payments'] },
+  { label: 'Mis clases dictadas', icon: 'school', href: '/teacher-report', teacher: true }, // RQ69
   { label: 'Reportes', icon: 'bar-chart', href: '/reports', perms: ['reports', 'capacity_reports'] },
+  { label: 'Reporte de profesores', icon: 'ribbon', href: '/teacher-report', perms: ['reports'] }, // RQ69
   { label: 'Planes', icon: 'pricetags', href: '/plans', perms: ['plans'] },
   { label: 'Sedes y espacios', icon: 'business', href: '/sites', perms: ['schedules'] },
   { label: 'Clases y profesores', icon: 'school', href: '/classes', perms: ['classes'] },
@@ -97,7 +99,7 @@ function ClientHome() {
 export default function Home() {
   const { user, isAdmin, can } = useSession();
   if (!user) return null;
-  const tiles = STAFF_TILES.filter((t) => (t.superadmin ? !!user.isSuperadmin : t.admin ? isAdmin : can(...(t.perms ?? []))));
+  const tiles = STAFF_TILES.filter((t) => (t.teacher ? !!user.teacher : t.superadmin ? !!user.isSuperadmin : t.admin ? isAdmin : can(...(t.perms ?? []))));
   return (
     <Screen title={user.tenant.name} right={<ProfileButton />}>
       {user.role === 'client' ? (

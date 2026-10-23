@@ -7,7 +7,8 @@
  */
 import { Router, type Request } from 'express';
 import { z } from 'zod';
-import { HttpError, requireAdmin, requirePerm } from '../auth.ts';
+import { DEFAULT_TEACHER_PERMISSIONS, HttpError, TEACHER_PERMISSIONS, assertOwnTeacher, hashPassword, requireAdmin, requirePerm } from '../auth.ts';
+import { assertNoAccountInTenant, assertUsernameFree, upsertPerson } from './auth.ts';
 import type { Db } from '../db.ts';
 import { deleteAcademy, deleteSites, deleteSpaces } from '../lib/cleanup.ts';
 import { dayOccupancy, freeSlots } from '../lib/scheduling.ts';
@@ -244,12 +245,22 @@ export function setupRoutes(db: Db) {
     fullName: text(120), kind: z.enum(['internal', 'external']), phone: optText(30), email: optText(120), specialty: optText(120),
     active: z.boolean().default(true),
     siteIds: z.array(id).min(1, 'Asigna el profesor al menos a una sede'),
+    // RQ69: usuario para entrar a la app (solo lo crea o cambia el administrador)
+    account: z.object({
+      username: z.string().trim().min(3).max(40).regex(/^[a-zA-Z0-9._-]+$/, 'Usuario: letras, números, punto, guion').optional(),
+      password: z.string().min(8, 'La contraseña debe tener al menos 8 caracteres').max(100).optional().or(z.literal('').transform(() => undefined)),
+      document: z.string().trim().min(4).max(30).optional(),
+      permissions: z.array(z.enum(TEACHER_PERMISSIONS)).default(DEFAULT_TEACHER_PERMISSIONS as any),
+      active: z.boolean().default(true),
+    }).optional().nullable(),
   });
 
   /** Profesores con las sedes (y academias) en las que pueden dar clase */
   const loadTeachers = async (tenantId: number, teacherId?: number) => {
     const rows = await db.query(
-      `SELECT * FROM teachers WHERE tenant_id = $1 AND ($2::int IS NULL OR id = $2) ORDER BY active DESC, full_name`,
+      `SELECT t.*, u.id AS user_id, u.username, u.permissions AS user_permissions, u.active AS user_active
+         FROM teachers t LEFT JOIN users u ON u.teacher_id = t.id
+        WHERE t.tenant_id = $1 AND ($2::int IS NULL OR t.id = $2) ORDER BY t.active DESC, t.full_name`,
       [tenantId, teacherId ?? null],
     );
     const links = rows.length
@@ -259,8 +270,9 @@ export function setupRoutes(db: Db) {
             WHERE ts.teacher_id IN ${idList(rows.map((t) => t.id))} ORDER BY a.name, s.name`,
         )
       : [];
-    return rows.map((t) => ({
+    return rows.map(({ user_id, username, user_permissions, user_active, ...t }) => ({
       ...t,
+      account: user_id ? { userId: user_id, username, permissions: user_permissions, active: !!user_active } : null, // RQ69
       sites: links.filter((l) => l.teacher_id === t.id).map((l) => ({ id: l.id, name: l.name, academy_id: l.academy_id, academy_name: l.academy_name })),
     }));
   };
@@ -274,7 +286,35 @@ export function setupRoutes(db: Db) {
     res.json(await loadTeachers(req.user.tenantId));
   });
 
+  /**
+   * RQ69: crea o actualiza el usuario del profesor (personal ligado al profesor, con permisos de profesor). Solo el
+   * administrador lo hace, para que nadie se de a si mismo mas permisos.
+   */
+  const saveTeacherAccount = async (q: Db, req: Request, teacherId: number, t: { fullName: string; email: string | null; phone: string | null }, a: NonNullable<z.infer<typeof teacherBody>['account']>) => {
+    if (req.user.role !== 'admin') throw new HttpError(403, 'Solo el administrador crea o cambia el usuario de un profesor', 'FORBIDDEN');
+    const [u] = await q.query(`SELECT id FROM users WHERE teacher_id = $1`, [teacherId]);
+    if (u) {
+      await q.query(`UPDATE users SET full_name = $2, email = $3, phone = $4, permissions = $5, active = $6 WHERE id = $1`, [u.id, t.fullName, t.email, t.phone, a.permissions, a.active]);
+      if (a.password) await q.query(`UPDATE users SET password_hash = $2 WHERE id = $1`, [u.id, await hashPassword(a.password)]);
+      return;
+    }
+    if (!a.username || !a.password || !a.document) throw new HttpError(400, 'Para crear el usuario del profesor indica usuario, contraseña y documento');
+    await assertUsernameFree(q, a.username);
+    const personId = await upsertPerson(q, a.document, t.fullName);
+    await assertNoAccountInTenant(q, req.user.tenantId, personId);
+    await q.query(
+      `INSERT INTO users (tenant_id, person_id, username, password_hash, full_name, email, phone, role, permissions, teacher_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'staff', $8, $9)`,
+      [req.user.tenantId, personId, a.username, await hashPassword(a.password), t.fullName, t.email, t.phone, a.permissions, teacherId],
+    );
+  };
+  // El usuario de un profesor no crea ni edita profesores
+  const notTeacherUser = (req: Request) => {
+    if (req.user.teacherId != null) throw new HttpError(403, 'Un profesor no puede crear ni editar profesores', 'FORBIDDEN');
+  };
+
   r.post('/teachers', classesPerm, async (req, res) => {
+    notTeacherUser(req);
     const b = parse(teacherBody, req.body);
     await ownAll(db, 'sites', b.siteIds, req.user.tenantId);
     const teacherId = await db.tx(async (q) => {
@@ -283,12 +323,14 @@ export function setupRoutes(db: Db) {
         [req.user.tenantId, b.fullName, b.kind, b.phone, b.email, b.specialty, b.active],
       );
       await saveTeacherSites(q, t.id, b.siteIds);
+      if (b.account) await saveTeacherAccount(q, req, t.id, b, b.account);
       return t.id as number;
     });
     res.status(201).json((await loadTeachers(req.user.tenantId, teacherId))[0]);
   });
 
   r.put('/teachers/:id', classesPerm, async (req, res) => {
+    notTeacherUser(req);
     const t = await own(db, 'teachers', parse(id, req.params.id), req.user.tenantId, 'Profesor');
     const b = parse(teacherBody, req.body);
     await ownAll(db, 'sites', b.siteIds, req.user.tenantId);
@@ -298,6 +340,9 @@ export function setupRoutes(db: Db) {
         [t.id, b.fullName, b.kind, b.phone, b.email, b.specialty, b.active],
       );
       await saveTeacherSites(q, t.id, b.siteIds);
+      if (b.account) await saveTeacherAccount(q, req, t.id, b, b.account);
+      // Desactivar al profesor desactiva tambien su usuario
+      if (!b.active) await q.query(`UPDATE users SET active = false WHERE teacher_id = $1`, [t.id]);
     });
     res.json((await loadTeachers(req.user.tenantId, t.id))[0]);
   });
@@ -354,6 +399,7 @@ export function setupRoutes(db: Db) {
 
   r.post('/classes', classesPerm, async (req, res) => {
     const b = parse(classBody.extend({ schedule: scheduleBody.optional().nullable() }), req.body);
+    assertOwnTeacher(req.user, b.teacherId, 'la clase'); // RQ69
     await checkClassRefs(req, b);
     const [c] = await db.query(
       `INSERT INTO classes (tenant_id, academy_id, teacher_id, space_id, name, description, default_capacity, active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
@@ -375,6 +421,8 @@ export function setupRoutes(db: Db) {
   r.put('/classes/:id', classesPerm, async (req, res) => {
     const c = await own(db, 'classes', parse(id, req.params.id), req.user.tenantId, 'Clase');
     const b = parse(classBody, req.body);
+    assertOwnTeacher(req.user, c.teacher_id, 'la clase'); // RQ69
+    assertOwnTeacher(req.user, b.teacherId, 'la clase');
     await checkClassRefs(req, b);
     const [row] = await db.query(
       `UPDATE classes SET academy_id = $2, teacher_id = $3, space_id = $4, name = $5, description = $6, default_capacity = $7, active = $8 WHERE id = $1 RETURNING *`,

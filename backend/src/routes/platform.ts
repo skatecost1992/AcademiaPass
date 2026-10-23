@@ -4,7 +4,8 @@
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { HttpError } from '../auth.ts';
+import { HttpError, signActingSession } from '../auth.ts';
+import { profile } from './auth.ts';
 import type { Db } from '../db.ts';
 import { id, parse } from '../lib/util.ts';
 
@@ -38,12 +39,26 @@ export function platformRoutes(db: Db) {
   });
 
   const review = (status: 'active' | 'rejected') => async (req: Request, res: Response) => {
+    if (req.user.actingTenantId != null) throw new HttpError(400, 'Vuelve primero a tu organización', 'ALREADY_ACTING');
     const tenantId = parse(id, req.params.id);
     if (tenantId === req.user.tenantId) throw new HttpError(400, 'No puedes cambiar el estado de tu propia organización');
     const upd = await db.query(`UPDATE tenants SET status = $2, reviewed_at = $3 WHERE id = $1 RETURNING id, name, status`, [tenantId, status, new Date()]);
     if (!upd.length) throw new HttpError(404, 'Organización no encontrada', 'NOT_FOUND');
     res.json(upd[0]);
   };
+  /**
+   * RQ70: el administrador general entra a una organizacion como su administrador para hacer y parametrizar todo
+   * (usuarios, clientes, planes, reglas, correos...). Recibe una sesion de 8 horas solo para esa organizacion.
+   */
+  r.post('/platform/tenants/:id/enter', requireSuperadmin, async (req, res) => {
+    if (req.user.actingTenantId != null) throw new HttpError(400, 'Vuelve primero a tu organización', 'ALREADY_ACTING');
+    const tenantId = parse(id, req.params.id);
+    const [t] = await db.query(`SELECT id, name FROM tenants WHERE id = $1`, [tenantId]);
+    if (!t) throw new HttpError(404, 'Organización no encontrada', 'NOT_FOUND');
+    console.log(`[plataforma] ${new Date().toISOString()} ${req.user.username} administra la organizacion #${t.id} ${t.name}`);
+    res.json({ token: signActingSession(req.user.id, t.id), user: await profile(db, req.user.id, t.id) });
+  });
+
   r.post('/platform/tenants/:id/approve', requireSuperadmin, review('active'));
   r.post('/platform/tenants/:id/reject', requireSuperadmin, review('rejected'));
 

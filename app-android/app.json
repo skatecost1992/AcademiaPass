@@ -3,7 +3,7 @@
     "name": "AcademiaPass",
     "slug": "academiapass-android",
     "scheme": "academiapass",
-    "version": "1.0.10",
+    "version": "1.0.11",
     "platforms": [
       "android",
       "web"
@@ -13,7 +13,7 @@
     "userInterfaceStyle": "light",
     "android": {
       "package": "com.cristhianhernandez.academiapass",
-      "versionCode": 11,
+      "versionCode": 12,
       "adaptiveIcon": {
         "backgroundColor": "#0F766E",
         "foregroundImage": "./assets/android-icon-foreground.png",

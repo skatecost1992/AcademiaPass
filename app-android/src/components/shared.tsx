@@ -3,9 +3,24 @@
  */
 import React, { useEffect } from 'react';
 import { Text, View } from 'react-native';
-import { qs } from '../lib/api';
+import { router } from 'expo-router';
+import { qs, serverLabel } from '../lib/api';
 import type { Academy, Site } from '../types';
 import { Chips, colors, useLoad } from './ui';
+
+/** Indica en que servidor quedara el registro, con acceso para cambiarlo */
+export function ServerNotice() {
+  return (
+    <View style={{ backgroundColor: colors.primarySoft, borderRadius: 10, padding: 10, marginBottom: 12 }}>
+      <Text style={{ color: colors.text, fontSize: 13 }}>
+        Te registrarás en: <Text style={{ fontWeight: '800' }}>{serverLabel()}</Text>
+      </Text>
+      <Text onPress={() => router.push('/server')} style={{ color: colors.primary, fontWeight: '700', fontSize: 13, marginTop: 4 }}>
+        Cambiar servidor
+      </Text>
+    </View>
+  );
+}
 
 export const CONSENT_TITLE = 'Autorización de tratamiento de datos personales';
 

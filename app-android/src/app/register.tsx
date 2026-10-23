@@ -1,7 +1,7 @@
 import { router } from 'expo-router';
 import React, { useState } from 'react';
 import { Text } from 'react-native';
-import { CONSENT_TITLE, ConsentText } from '../components/shared';
+import { CONSENT_TITLE, ConsentText, ServerNotice } from '../components/shared';
 import { Button, Card, Checkbox, Field, Gap, Muted, Screen, Section, colors, errorText } from '../components/ui';
 import { post } from '../lib/api';
 import { useSession } from '../session';
@@ -40,6 +40,7 @@ export default function Register() {
 
   return (
     <Screen title="Crear cuenta">
+      <ServerNotice />
       <Card>
         <Field label="Código de la academia" value={f.joinCode} onChangeText={set('joinCode')} autoCapitalize="characters" placeholder="Ej. K7P2QX" hint="Pídelo en la recepción de tu academia." />
         <Field label="Nombre completo" value={f.fullName} onChangeText={set('fullName')} />

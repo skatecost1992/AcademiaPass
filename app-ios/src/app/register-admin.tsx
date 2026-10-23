@@ -1,6 +1,7 @@
 import { router } from 'expo-router';
 import React, { useState } from 'react';
 import { Text } from 'react-native';
+import { ServerNotice } from '../components/shared';
 import { Button, Card, Checkbox, Field, Gap, Muted, Screen, Section, colors, errorText, notify } from '../components/ui';
 import { post } from '../lib/api';
 import { useSession } from '../session';
@@ -39,6 +40,7 @@ export default function RegisterAdmin() {
 
   return (
     <Screen title="Registrar mi academia">
+      <ServerNotice />
       <Muted>Crea tu organización. Luego podrás agregar más academias, sedes, espacios, planes y usuarios.</Muted>
       <Section title="Organización">
         <Card>

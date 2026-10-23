@@ -88,14 +88,19 @@ export async function setServer(mode: ServerMode, customUrl?: string) {
 /** Inicia sesion en un servidor que aun no es el activo (pantalla Servidor). Devuelve token y perfil */
 export async function loginAt(url: string, username: string, password: string) {
   let res: Response;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
   try {
     res = await fetch(`${normalizeUrl(url)}/api/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ username: username.trim().toLowerCase(), password }),
+      signal: ctrl.signal,
     });
-  } catch {
-    throw new ApiError(0, 'No hay conexión con ese servidor', { code: 'NETWORK' });
+  } catch (e) {
+    throw new ApiError(0, (e as Error)?.name === 'AbortError' ? 'Ese servidor no respondió a tiempo' : 'No hay conexión con ese servidor', { code: 'NETWORK' });
+  } finally {
+    clearTimeout(timer);
   }
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new ApiError(res.status, data?.error ?? `Error ${res.status}`, data);
@@ -129,19 +134,39 @@ export function setUnauthorizedHandler(fn: () => void) {
   onUnauthorized = fn;
 }
 
+const REQUEST_TIMEOUT_MS = 60_000;
+
+/** Nombre corto del servidor actual para mostrarlo en pantallas y mensajes */
+export function serverLabel() {
+  const mode = getServerMode();
+  const kind = mode === 'cloud' ? 'Nube' : mode === 'local' ? 'Local' : 'Servidor';
+  return `${kind} (${apiUrl || 'sin configurar'})`;
+}
+
 export async function api<T = any>(method: string, path: string, body?: unknown): Promise<T> {
   if (!apiUrl) throw new ApiError(0, 'Configura la dirección del servidor en "Servidor".', { code: 'NO_SERVER' });
   let res: Response;
+  let text: string;
+  // Tiempo limite: un servidor que acepta la conexion pero no responde (p. ej. Render apagado) dejaria la app
+  // cargando para siempre. 60 s cubren el arranque en frio del plan gratuito de Render
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
   try {
     res = await fetch(`${apiUrl}/api${path}`, {
       method,
       headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: ctrl.signal,
     });
-  } catch {
-    throw new ApiError(0, 'No hay conexión con el servidor. Revisa tu internet o la dirección del servidor.', { code: 'NETWORK' });
+    text = await res.text();
+  } catch (e) {
+    if ((e as Error)?.name === 'AbortError') {
+      throw new ApiError(0, `El servidor ${serverLabel()} no respondió en ${REQUEST_TIMEOUT_MS / 1000} segundos. Si es la nube, puede estar apagada o despertando: intenta de nuevo en un minuto o cambia de servidor en "Servidor".`, { code: 'TIMEOUT' });
+    }
+    throw new ApiError(0, `No hay conexión con el servidor ${serverLabel()}. Revisa tu internet o la dirección en "Servidor".`, { code: 'NETWORK' });
+  } finally {
+    clearTimeout(timer);
   }
-  const text = await res.text();
   let data: any = null;
   try {
     data = text ? JSON.parse(text) : null;

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Dimensions, StyleSheet, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { Button, Card, ErrorBox, Loading, Muted, Screen, colors, errorText } from '../components/ui';
 import { get } from '../lib/api';
@@ -14,6 +14,7 @@ export default function MyQr() {
   const [qr, setQr] = useState<{ token: string; expiresAt: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
+  const size = Math.min(320, Dimensions.get('window').width - 90);
 
   const load = useCallback(async () => {
     try {
@@ -46,13 +47,14 @@ export default function MyQr() {
         <Text style={s.name}>{user?.fullName}</Text>
         <Muted>Documento {user?.document}</Muted>
         <View style={s.qrBox}>
-          {qr ? <QRCode value={qr.token} size={250} color={colors.text} backgroundColor="#fff" ecl="M" /> : error ? null : <Loading />}
+          {/* QR corto y con correccion baja: modulos grandes que la camara lee facil (RQ57); fondo blanco con margen */}
+          {qr ? <QRCode value={qr.token} size={size} color="#000" backgroundColor="#fff" ecl="L" quietZone={12} /> : error ? null : <Loading />}
         </View>
         {qr ? <Muted>Se renueva automáticamente · {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}</Muted> : null}
       </Card>
       {error ? <ErrorBox error={error} onRetry={load} /> : null}
       <Muted style={{ textAlign: 'center', marginVertical: 10 }}>
-        Muestra este código en la recepción. El personal elegirá la academia y la sede y se descontará la clase del plan correspondiente.
+        Muestra este código en la recepción con el brillo de la pantalla alto. El personal elegirá la academia y la sede y se descontará la clase del plan correspondiente.
       </Muted>
       <Button label="Actualizar código" variant="secondary" icon="refresh" onPress={load} />
     </Screen>

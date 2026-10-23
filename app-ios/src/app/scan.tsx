@@ -5,7 +5,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import React, { useRef, useState } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, Vibration, View } from 'react-native';
 import { PlacePicker } from '../components/shared';
 import { Badge, Button, Card, Chips, Field, Gap, ListItem, Muted, Screen, Section, colors, useLoad } from '../components/ui';
 import { ApiError, post, qs } from '../lib/api';
@@ -127,7 +127,8 @@ export default function Scan() {
   const onScanned = ({ data }: { data: string }) => {
     if (locked.current || busy || result) return;
     locked.current = true;
-    void register({ qrToken: data }).finally(() => { locked.current = false; });
+    Vibration.vibrate(60); // aviso inmediato de que la camara leyo un codigo
+    void register({ qrToken: data.trim() }).finally(() => { locked.current = false; });
   };
 
   // RQ37: deja la solicitud pendiente para quien puede autorizar el ingreso
@@ -188,7 +189,7 @@ export default function Scan() {
               <View style={s.cameraBox}>
                 <CameraView style={StyleSheet.absoluteFill} facing="back" barcodeScannerSettings={{ barcodeTypes: ['qr'] }} onBarcodeScanned={busy ? undefined : onScanned} />
                 <View style={s.frame} pointerEvents="none" />
-                {busy ? <Text style={s.cameraHint}>Validando…</Text> : <Text style={s.cameraHint}>Apunta al código QR del cliente</Text>}
+                {busy ? <Text style={s.cameraHint}>Código leído, validando…</Text> : <Text style={s.cameraHint}>Apunta al QR del cliente a 15–25 cm</Text>}
               </View>
             )
           ) : (

@@ -181,6 +181,10 @@ describe('AcademiaPass API', () => {
     assert.equal(r.user.role, 'client');
     const qr = await ok('GET', '/me/qr', undefined, s.client);
     s.qr = qr.token;
+    // RQ57: QR compacto (modulos grandes, facil de leer) y firmado
+    assert.ok(qr.token.startsWith('AP.') && qr.token.length < 60, `QR corto: ${qr.token.length} caracteres`);
+    const forged = qr.token.replace(/\.(\d+)\.(\d+)\./, (_m: string, u: string, t: string) => `.${Number(u) + 1}.${t}.`);
+    assert.equal((await call('POST', '/attendance/scan', { qrToken: forged, academyId: s.academyA.id, siteId: s.siteA1.id }, s.admin)).body.code, 'QR_INVALID');
     const forbidden = await call('GET', '/clients', undefined, s.client);
     assert.equal(forbidden.status, 403, 'un cliente no ve otros clientes (RQ23)');
   });

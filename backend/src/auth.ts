@@ -5,6 +5,7 @@
  * El admin crea usuarios `staff` con permisos puntuales (RQ17).
  */
 import bcrypt from 'bcryptjs';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import type { Db } from './db.ts';
@@ -84,11 +85,28 @@ export function signSession(userId: number) {
 
 /** Token del QR del cliente: vence en minutos para que una captura de pantalla no sirva despues (RQ7) */
 export const QR_TTL_SECONDS = 300;
+/**
+ * QR compacto (RQ57): "AP.<cliente>.<organizacion>.<vence en segundos>.<firma>", unos 40 caracteres en vez de
+ * ~200 de un JWT, para que el codigo tenga modulos grandes y la camara lo lea facil. La firma es un HMAC-SHA256
+ * truncado (96 bits) con la misma clave del servidor; vence a los QR_TTL_SECONDS.
+ */
+const qrSignature = (payload: string) => createHmac('sha256', secret()).update(`qr.${payload}`).digest('base64url').slice(0, 16);
+
 export function signQr(userId: number, tenantId: number) {
-  return jwt.sign({ sub: String(userId), tid: tenantId, typ: 'qr' }, secret(), { expiresIn: QR_TTL_SECONDS });
+  const payload = `${userId}.${tenantId}.${Math.floor(Date.now() / 1000) + QR_TTL_SECONDS}`;
+  return `AP.${payload}.${qrSignature(payload)}`;
 }
 
 export function verifyQr(token: string): { userId: number; tenantId: number } {
+  const compact = /^AP\.(\d+)\.(\d+)\.(\d+)\.([\w-]{16})$/.exec(token.trim());
+  if (compact) {
+    const [, uid, tid, exp, sig] = compact;
+    const expected = Buffer.from(qrSignature(`${uid}.${tid}.${exp}`));
+    if (!timingSafeEqual(expected, Buffer.from(sig))) throw new HttpError(400, 'Código QR inválido', 'QR_INVALID');
+    if (Number(exp) * 1000 < Date.now()) throw new HttpError(400, 'El código QR venció. Pide al cliente que lo actualice.', 'QR_EXPIRED');
+    return { userId: Number(uid), tenantId: Number(tid) };
+  }
+  // Formato anterior (JWT), por si un cliente tiene una version vieja de la app abierta
   try {
     const p = jwt.verify(token, secret()) as jwt.JwtPayload;
     if (p.typ !== 'qr') throw new Error();

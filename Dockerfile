@@ -1,5 +1,5 @@
-# Imagen de AcademiaPass (API + version web en un solo servicio) para la maquina virtual de Oracle Cloud
-# (deploy/oracle) o cualquier servicio con Docker. La base de datos es externa (Neon): DATABASE_URL. PORT = 8080.
+# Imagen de AcademiaPass (API + version web en un solo servicio) para Railway (railway.json), la maquina virtual de
+# Oracle Cloud (deploy/oracle) o cualquier servicio con Docker. Base externa (Neon): DATABASE_URL. Puerto: PORT.
 
 # 1. Version web de la app (Expo) exportada a archivos estaticos
 FROM node:24-slim AS web

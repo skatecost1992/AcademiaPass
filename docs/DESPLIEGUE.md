@@ -1,7 +1,8 @@
 # Despliegue y compilación
 
-> **Servidor siempre en línea:** ver [DESPLIEGUE_ORACLE.md](DESPLIEGUE_ORACLE.md) (máquina virtual gratuita de
-> Oracle con Docker y HTTPS). El plan gratis de Render se apaga sin uso y no sirve para los correos automáticos.
+> **Servidor siempre en línea:** [DESPLIEGUE_RAILWAY.md](DESPLIEGUE_RAILWAY.md) (Railway Hobby, recomendado) o
+> [DESPLIEGUE_ORACLE.md](DESPLIEGUE_ORACLE.md) (máquina virtual gratuita de Oracle con Docker y HTTPS). El plan
+> gratis de Render se apaga sin uso y no sirve para los correos automáticos.
 
 ## 1. Base de datos (Neon) y API + web en la nube (Render)
 

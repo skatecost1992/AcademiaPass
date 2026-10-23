@@ -1,8 +1,7 @@
 # Despliegue y compilación
 
-> **Servidor siempre en línea:** [DESPLIEGUE_RAILWAY.md](DESPLIEGUE_RAILWAY.md) (Railway Hobby, recomendado) o
-> [DESPLIEGUE_ORACLE.md](DESPLIEGUE_ORACLE.md) (máquina virtual gratuita de Oracle con Docker y HTTPS). El plan
-> gratis de Render se apaga sin uso y no sirve para los correos automáticos.
+> **Servidor en línea:** [DESPLIEGUE_RENDER.md](DESPLIEGUE_RENDER.md) (Render con Docker + monitor que lo mantiene
+> despierto, o plan Starter). Alternativas: [Railway](DESPLIEGUE_RAILWAY.md) y [Oracle Cloud](DESPLIEGUE_ORACLE.md).
 
 ## 1. Base de datos (Neon) y API + web en la nube (Render)
 
@@ -17,16 +16,19 @@ de ellas se ve en las demás.
    región *AWS US East* o la más cercana) → copia la **Connection string** (empieza por `postgresql://` y
    termina en `?sslmode=require`). No la guardes en el repositorio.
 2. **Render**: **New → Blueprint** → repositorio `AcademiaPass`. Render lee `render.yaml` y crea solo el
-   servicio web `academiapass`. Te pedirá:
+   servicio web `academiapass` con el `Dockerfile`. Te pedirá:
    - `DATABASE_URL`: pega la cadena de Neon.
+   - `RESEND_API_KEY` o `BREVO_API_KEY` y `MAIL_FROM`: correos automáticos (ver DESPLIEGUE_RENDER.md).
    - `ADMIN_SIGNUP_CODE`: opcional (vacío = cualquiera puede registrar una organización).
+   Si ya existe un servicio `academiapass` creado con Node, elimínalo antes (Render no lo cambia a Docker).
 3. Pulsa **Apply** y espera el estado **Live**. Abre `https://<servicio>.onrender.com/api/health`: debe
    responder `{"ok":true,...}`. Al arrancar se crean las tablas y el usuario `admin` (clave inicial
    `Bogota.2027`) en la base de Neon.
 4. Si ya habías creado el Blueprint y falló, ábrelo y pulsa **Manual sync** después de subir este cambio.
 
 Notas:
-- El plan gratuito de Render "duerme" el servicio tras 15 minutos sin uso (el primer acceso tarda ~1 minuto).
+- El plan gratuito de Render "duerme" el servicio tras 15 minutos sin uso (el primer acceso tarda ~1 minuto) y
+  con él se detienen los correos automáticos: un monitor de UptimeRobot a `/api/health` cada 5 minutos lo evita.
 - Para datos de prueba en la nube: con `DATABASE_URL` de Neon en tu terminal, `npm run seed` desde `backend/`.
 
 ## 2. Apuntar las apps al servidor

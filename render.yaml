@@ -1,22 +1,23 @@
-# Blueprint de Render: un solo servicio web con la API y la version web (RQ24, RQ27).
+# Blueprint de Render: un solo servicio web con la API y la version web (RQ24, RQ27), construido con el Dockerfile
+# de la raiz (el mismo que se probo en modo produccion). Guia: docs/DESPLIEGUE_RENDER.md
 #
-# La base de datos es PostgreSQL externo (Neon, gratis y sin vencimiento): la cuenta gratuita de Render solo
-# permite una base activa y ya esta en uso. Render > New > Blueprint > este repositorio, y en DATABASE_URL pega
-# la cadena de Neon (postgresql://...?sslmode=require).
+# La base de datos es PostgreSQL externo (Neon): en DATABASE_URL pega la cadena de Neon (postgresql://...?sslmode=require).
+# Misma base para todos: la web (https://<servicio>.onrender.com) y las apps Android/iOS en la opcion "Nube".
 #
-# Misma base para todos: la web (https://<servicio>.onrender.com) y las apps Android/iOS en la opcion "Nube"
-# llaman a esta misma API, que usa esta unica DATABASE_URL.
+# Siempre encendido: el plan free se duerme tras 15 minutos sin trafico (y con el, los recordatorios por correo).
+# Con plan free, un monitor externo (UptimeRobot) que consulte /api/health cada 5 minutos lo mantiene despierto;
+# con plan starter (pago) no se duerme nunca.
 services:
   - type: web
     name: academiapass
-    runtime: node
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     plan: free
-    buildCommand: cd backend && npm ci && cd ../app-android && npm ci --legacy-peer-deps && npm run build:web
-    startCommand: cd backend && npm start
+    region: ohio # cerca de Neon (us-east-2)
     healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
-      - key: NODE_VERSION
-        value: "24"
       - key: NODE_ENV
         value: production
       - key: APP_TIMEZONE
@@ -25,16 +26,12 @@ services:
         generateValue: true
       - key: DATABASE_URL
         sync: false # se pide al crear el Blueprint: cadena de conexion de Neon
+      # Correos (RQ63, RQ64): Render bloquea SMTP en el plan free; se usa la API HTTPS de Resend o de Brevo
+      - key: RESEND_API_KEY
+        sync: false # clave de Resend (re_...); vacia si usas Brevo
+      - key: BREVO_API_KEY
+        sync: false # clave de Brevo; vacia si usas Resend
+      - key: MAIL_FROM
+        sync: false # remitente verificado, p. ej. AcademiaPass <avisos@tu-dominio.com>
       - key: ADMIN_SIGNUP_CODE
         sync: false # opcional: si lo defines, solo quien lo conozca puede registrar una organizacion
-      # Correos de recordatorio y vencimiento de plan (RQ63, RQ64); sin SMTP_HOST solo se registran
-      - key: SMTP_HOST
-        sync: false
-      - key: SMTP_PORT
-        value: "587"
-      - key: SMTP_USER
-        sync: false
-      - key: SMTP_PASS
-        sync: false
-      - key: MAIL_FROM
-        sync: false

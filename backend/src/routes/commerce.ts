@@ -207,7 +207,10 @@ export function commerceRoutes(db: Db) {
     res.json(await db.query(
       `SELECT pay.id, pay.amount, pay.method, pay.reference, pay.notes, pay.paid_at, pay.membership_id, pay.booking_id,
               coalesce(u.full_name, pay.payer_name) AS payer, pay.client_id,
-              CASE WHEN pay.membership_id IS NOT NULL THEN CONCAT('Plan: ', pl.name) ELSE CONCAT('Reserva: ', b.title) END AS concept
+              pl.name AS plan_name, b.title AS booking_title,
+              CASE WHEN pay.booking_id IS NULL THEN CONCAT('Plan: ', pl.name)
+                   WHEN pay.membership_id IS NULL THEN CONCAT('Reserva: ', b.title)
+                   ELSE CONCAT('Plan: ', pl.name, ' · Reserva: ', b.title) END AS concept
          FROM payments pay
          LEFT JOIN users u ON u.id = pay.client_id
          LEFT JOIN memberships m ON m.id = pay.membership_id LEFT JOIN plans pl ON pl.id = m.plan_id
@@ -222,22 +225,20 @@ export function commerceRoutes(db: Db) {
     ).then((rows) => rows.map((p) => ({ ...p, amount: Number(p.amount) }))));
   });
 
-  // Todo pago va ligado a un plan adquirido o a una reserva (RQ6)
+  // Todo pago va a un cliente y a uno de sus planes adquiridos (RQ6, RQ34). La reserva de espacio es opcional:
+  // si se indica debe ser de ese mismo cliente
   r.post('/payments', requirePerm('payments'), async (req, res) => {
-    const b = parse(z.object({ ...paymentFields, membershipId: optId, bookingId: optId, payerName: optText(120) })
-      .refine((p) => !!p.membershipId !== !!p.bookingId, { message: 'Asocia el pago a un plan adquirido o a una reserva (solo uno)', path: ['membershipId'] }), req.body);
-    let clientId: number | null;
-    if (b.membershipId) {
-      clientId = (await own(db, 'memberships', b.membershipId, req.user.tenantId, 'Plan adquirido')).client_id;
-    } else {
-      const bk = await own(db, 'bookings', b.bookingId!, req.user.tenantId, 'Reserva');
-      clientId = bk.client_id;
-      if (!clientId && !b.payerName) throw new HttpError(400, 'payerName: Indica quién paga la reserva');
+    const b = parse(z.object({ ...paymentFields, clientId: optId, membershipId: z.coerce.number({ error: 'Selecciona el plan del cliente' }).int().positive(), bookingId: optId.nullable() }), req.body);
+    const m = await own(db, 'memberships', b.membershipId, req.user.tenantId, 'Plan adquirido');
+    if (b.clientId && b.clientId !== m.client_id) throw new HttpError(400, 'El plan seleccionado no pertenece a ese cliente');
+    if (b.bookingId) {
+      const bk = await own(db, 'bookings', b.bookingId, req.user.tenantId, 'Reserva');
+      if (bk.client_id !== m.client_id) throw new HttpError(400, 'La reserva no pertenece al cliente del plan');
     }
     const [p] = await db.query(
-      `INSERT INTO payments (tenant_id, client_id, payer_name, membership_id, booking_id, amount, method, reference, notes, paid_at, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id, amount, method, paid_at`,
-      [req.user.tenantId, clientId, b.payerName, b.membershipId ?? null, b.bookingId ?? null, b.amount, b.method, b.reference, b.notes, b.paidAt ? new Date(b.paidAt) : new Date(), req.user.id],
+      `INSERT INTO payments (tenant_id, client_id, membership_id, booking_id, amount, method, reference, notes, paid_at, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, amount, method, paid_at`,
+      [req.user.tenantId, m.client_id, m.id, b.bookingId ?? null, b.amount, b.method, b.reference, b.notes, b.paidAt ? new Date(b.paidAt) : new Date(), req.user.id],
     );
     res.status(201).json({ ...p, amount: Number(p.amount) });
   });

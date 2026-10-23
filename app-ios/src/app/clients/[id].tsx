@@ -65,7 +65,7 @@ export default function ClientDetail() {
                   <Muted style={{ fontSize: 12 }}>{m.academies.map((a) => a.name).join(', ')} · {m.all_sites ? 'todas las sedes' : m.sites.map((s) => s.name).join(', ')}</Muted>
                   {m.status === 'active' ? (
                     <RowWrap style={{ marginTop: 8 }}>
-                      {can('payments') && m.paid < m.price ? <Button small label="Registrar pago" icon="cash-outline" onPress={() => router.push({ pathname: '/payments/new', params: { membershipId: String(m.id) } })} /> : null}
+                      {can('payments') && m.paid < m.price ? <Button small label="Registrar pago" icon="cash-outline" onPress={() => router.push({ pathname: '/payments/new', params: { membershipId: String(m.id), clientId: String(c.id) } })} /> : null}
                       {can('clients') ? <Button small label="Cancelar plan" variant="ghost" onPress={() => cancelMembership(m)} /> : null}
                     </RowWrap>
                   ) : null}

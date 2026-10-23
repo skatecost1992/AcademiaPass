@@ -41,4 +41,9 @@ cliente (o busca por documento). Resultado:
 6. **Unirme a otra academia** (de la misma organización). Para una academia de otra organización se crea una
    cuenta nueva con el mismo documento.
 
-El administrador fija el límite de cancelación en **Reglas de reserva** (inicio).
+El administrador fija el límite de cancelación en **Reglas de reserva** (inicio): una regla general y, si
+quiere, una distinta por academia y por sede (la de la sede manda). Cada clase en *Mis reservas* muestra hasta
+cuándo se puede cancelar.
+
+**Pagos:** todo pago se registra a un **cliente** y a uno de **sus planes**. Si corresponde a una reserva de
+espacio, se puede asociar también a esa reserva (debe ser del mismo cliente).

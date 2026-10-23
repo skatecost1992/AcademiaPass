@@ -215,8 +215,7 @@ CREATE TABLE dbo.payments (                                     -- RQ4, RQ6: pla
   reference NVARCHAR(120) NULL,
   notes NVARCHAR(500) NULL,
   paid_at DATETIMEOFFSET NOT NULL DEFAULT SYSDATETIMEOFFSET(),
-  created_by INT NULL REFERENCES dbo.users(id),
-  CONSTRAINT ck_payments_target CHECK ((membership_id IS NULL AND booking_id IS NOT NULL) OR (membership_id IS NOT NULL AND booking_id IS NULL))
+  created_by INT NULL REFERENCES dbo.users(id)
 );
 
 IF OBJECT_ID(N'dbo.attendances', N'U') IS NULL
@@ -256,6 +255,16 @@ CREATE TABLE dbo.class_reservations (
 );
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'class_reservations_once')
   CREATE UNIQUE INDEX class_reservations_once ON dbo.class_reservations (booking_id, client_id) WHERE status = N'confirmed';
+
+-- RQ34: todo pago va a un cliente y a un plan adquirido (la reserva es opcional); la API lo exige
+IF OBJECT_ID(N'dbo.ck_payments_target', N'C') IS NOT NULL
+  ALTER TABLE dbo.payments DROP CONSTRAINT ck_payments_target;
+
+-- RQ35: limite de cancelacion por academia y por sede (NULL = hereda)
+IF COL_LENGTH(N'dbo.academies', N'cancel_hours') IS NULL
+  ALTER TABLE dbo.academies ADD cancel_hours INT NULL;
+IF COL_LENGTH(N'dbo.sites', N'cancel_hours') IS NULL
+  ALTER TABLE dbo.sites ADD cancel_hours INT NULL;
 
 DECLARE @tablas INT = (SELECT COUNT(*) FROM sys.tables WHERE name IN
   (N'tenants', N'persons', N'academies', N'sites', N'users', N'spaces', N'photos', N'teachers', N'classes', N'bookings',

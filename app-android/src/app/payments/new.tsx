@@ -1,42 +1,50 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Button, Card, Chips, Field, InfoRow, Muted, Screen, Section, errorText, notify, useLoad } from '../../components/ui';
-import { post, qs } from '../../lib/api';
+import { get, post, qs } from '../../lib/api';
 import { PAY_METHODS, addDays, cap, fmtDate, fmtRange, money, today } from '../../lib/format';
 import type { Booking, ClientRow, Membership } from '../../types';
 
 /**
- * Registrar un pago. Todo pago se asocia a un plan adquirido o a una reserva (RQ6): llega con el id desde la ficha
- * del cliente o de la reserva, o se busca el cliente y se elige a que corresponde.
+ * Registrar un pago: siempre a un cliente y a uno de sus planes adquiridos (RQ6, RQ34). Opcionalmente se asocia
+ * a una reserva de espacio de ese mismo cliente. Llega con el plan o la reserva desde sus fichas, o se busca el
+ * cliente.
  */
 export default function NewPayment() {
-  const params = useLocalSearchParams<{ membershipId?: string; bookingId?: string }>();
+  const params = useLocalSearchParams<{ membershipId?: string; bookingId?: string; clientId?: string }>();
   const [q, setQ] = useState('');
-  const [client, setClient] = useState<ClientRow | null>(null);
-  const [target, setTarget] = useState<string | null>(params.membershipId ? `m${params.membershipId}` : params.bookingId ? `b${params.bookingId}` : null);
-  const [f, setF] = useState({ amount: '', method: 'efectivo', reference: '', notes: '', payerName: '' });
+  const [client, setClient] = useState<{ id: number; full_name: string; document: string } | null>(null);
+  const [membershipId, setMembershipId] = useState<number | null>(params.membershipId ? Number(params.membershipId) : null);
+  const [bookingId, setBookingId] = useState<number | null>(params.bookingId ? Number(params.bookingId) : null);
+  const [f, setF] = useState({ amount: '', method: 'efectivo', reference: '', notes: '' });
   const [busy, setBusy] = useState(false);
-  const fixed = !!(params.membershipId || params.bookingId);
 
-  const clients = useLoad<ClientRow[]>(!fixed && q.trim().length >= 2 && !client ? `/clients${qs({ q: q.trim() })}` : null);
+  // Desde una reserva o un cliente concreto: se fija el cliente
+  const fromBooking = useLoad<Booking>(params.bookingId ? `/bookings/${params.bookingId}` : null);
+  useEffect(() => {
+    const id = params.clientId ? Number(params.clientId) : fromBooking.data?.client_id;
+    if (id && !client) get<ClientRow>(`/clients/${id}`).then((c) => setClient({ id: c.id, full_name: c.full_name, document: c.document })).catch(() => {});
+  }, [fromBooking.data, params.clientId, client]);
+
+  const found = useLoad<ClientRow[]>(!client && q.trim().length >= 2 ? `/clients${qs({ q: q.trim() })}` : null);
   const detail = useLoad<{ memberships: Membership[] }>(client ? `/clients/${client.id}` : null);
-  const bookings = useLoad<Booking[]>(client ? `/bookings${qs({ from: addDays(today(), -60), to: addDays(today(), 120), kind: 'rental' })}` : null);
-  const booking = useLoad<Booking>(params.bookingId ? `/bookings/${params.bookingId}` : null);
+  const rentals = useLoad<Booking[]>(client ? `/bookings${qs({ from: addDays(today(), -60), to: addDays(today(), 120), kind: 'rental' })}` : null);
 
-  const options = [
-    ...(detail.data?.memberships ?? []).filter((m) => m.status === 'active').map((m) => ({ value: `m${m.id}`, label: `Plan ${m.plan_name} (pagado ${money(m.paid)} de ${money(m.price)})` })),
-    ...(bookings.data ?? []).filter((b) => b.client_id === client?.id && b.status === 'confirmed').map((b) => ({ value: `b${b.id}`, label: `Reserva ${fmtDate(b.starts_at)} ${b.space_name}` })),
-  ];
-  const needsPayer = !!booking.data && !booking.data.client_id;
+  const memberships = (detail.data?.memberships ?? []).filter((m) => m.status === 'active');
+  const clientRentals = (rentals.data ?? []).filter((b) => b.client_id === client?.id && b.status === 'confirmed');
+  const plan = memberships.find((m) => m.id === membershipId);
+  const bookingWithoutClient = !!fromBooking.data && !fromBooking.data.client_id;
+
+  useEffect(() => {
+    if (!membershipId && memberships.length === 1) setMembershipId(memberships[0].id);
+  }, [memberships.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async () => {
-    if (!target) return;
     setBusy(true);
     try {
       await post('/payments', {
+        clientId: client!.id, membershipId, bookingId,
         amount: Number(f.amount), method: f.method, reference: f.reference || null, notes: f.notes || null,
-        ...(target.startsWith('m') ? { membershipId: Number(target.slice(1)) } : { bookingId: Number(target.slice(1)) }),
-        ...(needsPayer ? { payerName: f.payerName } : {}),
       });
       notify('Pago registrado');
       router.back();
@@ -47,38 +55,63 @@ export default function NewPayment() {
     }
   };
 
+  if (bookingWithoutClient) {
+    return (
+      <Screen title="Registrar pago">
+        <Card>
+          <Muted>
+            Esta reserva no está a nombre de un cliente. Todo pago se registra a un cliente y a uno de sus planes:
+            registra a quien paga como cliente, asígnale un plan y registra el pago desde su ficha.
+          </Muted>
+        </Card>
+      </Screen>
+    );
+  }
+
   return (
     <Screen title="Registrar pago">
-      {!fixed ? (
-        <Section title="Cliente">
-          {client ? (
-            <Card>
-              <InfoRow label={client.full_name} value={`Doc. ${client.document}`} />
-              <Button small variant="ghost" label="Cambiar cliente" onPress={() => { setClient(null); setTarget(null); }} />
-            </Card>
-          ) : (
-            <>
-              <Field label="Buscar cliente" value={q} onChangeText={setQ} placeholder="Nombre o documento" />
-              <Chips options={(clients.data ?? []).slice(0, 10).map((c) => ({ value: c.id, label: `${c.full_name} · ${c.document}` }))} onChange={(v) => setClient(clients.data!.find((c) => c.id === v)!)} />
-            </>
-          )}
-          {client ? (
-            options.length ? <Chips label="Concepto" options={options} value={target ?? undefined} onChange={setTarget} />
-              : <Muted>El cliente no tiene planes activos ni reservas. Asígnale un plan desde su ficha.</Muted>
-          ) : null}
+      <Section title="1. Cliente">
+        {client ? (
+          <Card>
+            <InfoRow label={client.full_name} value={`Doc. ${client.document}`} />
+            {!params.bookingId && !params.clientId && !params.membershipId ? (
+              <Button small variant="ghost" label="Cambiar cliente" onPress={() => { setClient(null); setMembershipId(null); setBookingId(null); }} />
+            ) : null}
+          </Card>
+        ) : (
+          <>
+            <Field label="Buscar cliente" value={q} onChangeText={setQ} placeholder="Nombre o documento" />
+            <Chips options={(found.data ?? []).slice(0, 10).map((c) => ({ value: c.id, label: `${c.full_name} · ${c.document}` }))}
+              onChange={(v) => { const c = found.data!.find((x) => x.id === v)!; setClient({ id: c.id, full_name: c.full_name, document: c.document }); }} />
+          </>
+        )}
+      </Section>
+
+      {client ? (
+        <Section title="2. Plan">
+          {memberships.length ? (
+            <Chips options={memberships.map((m) => ({ value: m.id, label: `${m.plan_name} · pagado ${money(m.paid)} de ${money(m.price)}` }))}
+              value={membershipId ?? undefined} onChange={setMembershipId} />
+          ) : <Muted>El cliente no tiene planes activos. Asígnale un plan desde su ficha antes de registrar el pago.</Muted>}
+          {plan ? <Muted style={{ fontSize: 12 }}>Vigencia {fmtDate(plan.starts_on)} – {fmtDate(plan.ends_on)}</Muted> : null}
         </Section>
-      ) : booking.data ? (
-        <Card><InfoRow label="Reserva" value={`${booking.data.title} · ${fmtRange(booking.data.starts_at, booking.data.ends_at)}`} /></Card>
-      ) : <Muted>Pago del plan seleccionado.</Muted>}
+      ) : null}
+
+      {client && clientRentals.length ? (
+        <Section title="3. Reserva de espacio (opcional)">
+          <Chips<number | null>
+            options={[{ value: null, label: 'Ninguna' }, ...clientRentals.map((b) => ({ value: b.id as number | null, label: `${fmtRange(b.starts_at, b.ends_at)} · ${b.space_name}` }))]}
+            value={bookingId} onChange={setBookingId} />
+        </Section>
+      ) : null}
 
       <Section title="Pago">
         <Card>
           <Field label="Valor" value={f.amount} onChangeText={(v) => setF({ ...f, amount: v.replace(/[^\d.]/g, '') })} keyboardType="decimal-pad" />
           <Chips label="Medio de pago" options={PAY_METHODS.map((m) => ({ value: m, label: cap(m) }))} value={f.method} onChange={(v) => setF({ ...f, method: v })} />
           <Field label="Referencia (opcional)" value={f.reference} onChangeText={(v) => setF({ ...f, reference: v })} />
-          {needsPayer ? <Field label="Quién paga" value={f.payerName} onChangeText={(v) => setF({ ...f, payerName: v })} placeholder="Ej. profesor externo" /> : null}
           <Field label="Notas" value={f.notes} onChangeText={(v) => setF({ ...f, notes: v })} multiline />
-          <Button label="Registrar pago" onPress={save} loading={busy} disabled={!target || !(Number(f.amount) > 0) || (needsPayer && !f.payerName.trim())} />
+          <Button label="Registrar pago" onPress={save} loading={busy} disabled={!client || !membershipId || !(Number(f.amount) > 0)} />
         </Card>
       </Section>
     </Screen>

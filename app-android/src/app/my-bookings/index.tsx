@@ -3,13 +3,14 @@ import React from 'react';
 import { BookingList } from '../../components/BookingList';
 import { Badge, Button, Empty, Gap, ListItem, Loader, Muted, RowWrap, Screen, Section, confirm, errorText, notify, useLoad } from '../../components/ui';
 import { post, qs } from '../../lib/api';
-import { addDays, fmtRange, money, today } from '../../lib/format';
+import { addDays, fmtDateTime, fmtRange, money, today } from '../../lib/format';
 import { useSession } from '../../session';
 import type { Booking } from '../../types';
 
 interface ClassReservation {
   id: number; booking_id: number; title: string; starts_at: string; ends_at: string; group_size: number; reserved: number;
   booking_status: string; site_name: string; space_name: string; academy_name: string; teacher_name: string | null;
+  cancel_hours: number; cancel_until: string;
 }
 
 /** Reservas del cliente: cupos en clases (RQ30-RQ32) y espacios reservados (RQ7) */
@@ -18,10 +19,9 @@ export default function MyBookings() {
   const from = addDays(today(), -30);
   const list = useLoad<Booking[]>(`/bookings${qs({ from, to: addDays(today(), 120), kind: 'rental' })}`);
   const classes = useLoad<ClassReservation[]>('/me/class-reservations');
-  const settings = useLoad<{ cancelHours: number }>('/settings');
   const mine = (list.data ?? []).filter((b) => b.client_id === user?.id);
-  const hours = settings.data?.cancelHours;
-  const rule = hours == null ? '' : hours === 0 ? 'Puedes cancelar hasta que empiece.' : `Puedes cancelar hasta ${hours % 24 === 0 ? `${hours / 24} día(s)` : `${hours} hora(s)`} antes del inicio.`;
+  // RQ35: cada academia y sede define su limite; en cada clase se muestra hasta cuando se puede cancelar
+  const rule = 'Cada sede define hasta cuándo puedes cancelar; lo ves en cada clase.';
 
   const reload = () => {
     void list.reload();
@@ -69,7 +69,7 @@ export default function MyBookings() {
               key={r.id}
               icon="school-outline"
               title={r.title}
-              subtitle={`${fmtRange(r.starts_at, r.ends_at)}\n${r.academy_name} · ${r.site_name} · ${r.space_name}${r.teacher_name ? ` · ${r.teacher_name}` : ''}`}
+              subtitle={`${fmtRange(r.starts_at, r.ends_at)}\n${r.academy_name} · ${r.site_name} · ${r.space_name}${r.teacher_name ? ` · ${r.teacher_name}` : ''}\n${new Date(r.cancel_until) > new Date() ? `Cancelas hasta ${fmtDateTime(r.cancel_until)}` : 'Ya no se puede cancelar desde la app'}`}
               right={r.booking_status === 'cancelled' ? <Badge text="Clase cancelada" tone="danger" /> : <Badge text={`${r.reserved}/${r.group_size}`} tone="success" />}
               onPress={() => cancelClass(r)}
             />

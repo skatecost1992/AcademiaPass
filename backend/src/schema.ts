@@ -199,8 +199,7 @@ CREATE TABLE IF NOT EXISTS payments (
   reference text,
   notes text,
   paid_at timestamptz NOT NULL DEFAULT now(),
-  created_by int REFERENCES users(id) ON DELETE SET NULL,
-  CHECK ((membership_id IS NULL) <> (booking_id IS NULL))
+  created_by int REFERENCES users(id) ON DELETE SET NULL
 );
 
 -- Ingresos registrados al escanear el QR (RQ7, RQ20, RQ21)
@@ -235,4 +234,12 @@ CREATE TABLE IF NOT EXISTS class_reservations (
   cancelled_at timestamptz
 );
 CREATE UNIQUE INDEX IF NOT EXISTS class_reservations_once ON class_reservations (booking_id, client_id) WHERE status = 'confirmed';
+
+-- RQ34: todo pago va a un cliente y a un plan adquirido (la reserva es opcional). Se quita la regla anterior
+-- "plan o reserva"; la API exige cliente y plan
+ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_check;
+
+-- RQ35: limite de cancelacion por academia y por sede (NULL = hereda de la academia / de la organizacion)
+ALTER TABLE academies ADD COLUMN IF NOT EXISTS cancel_hours int;
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS cancel_hours int;
 `;

@@ -302,8 +302,18 @@ describe('AcademiaPass API', () => {
     await ok('PUT', '/settings', { cancelHours: 48 }, s.admin);
     assert.equal((await ok('GET', '/settings', undefined, s.client)).cancelHours, 48);
     assert.equal((await call('POST', `/me/class-reservations/${mine.id}/cancel`, {}, s.client)).body.code, 'CANCEL_DEADLINE');
-    await ok('PUT', '/settings', { cancelHours: 1 }, s.admin);
+    // RQ35: la academia hereda 48 h salvo que defina la suya; la sede manda sobre la academia
+    await ok('PUT', '/settings', { academies: [{ id: s.academyA.id, cancelHours: 72 }] }, s.admin);
+    let st = await ok('GET', '/settings', undefined, s.admin);
+    assert.equal(st.academies.find((a: any) => a.id === s.academyA.id).cancelHours, 72);
+    assert.equal((await call('POST', `/me/class-reservations/${mine.id}/cancel`, {}, s.client)).body.cancelHours, 72);
+    await ok('PUT', '/settings', { sites: [{ id: s.siteA1.id, cancelHours: 1 }] }, s.admin);
+    st = await ok('GET', '/settings', undefined, s.admin);
+    assert.equal(st.sites.find((x: any) => x.id === s.siteA1.id).cancelHours, 1);
+    const listed = await ok('GET', '/me/class-reservations', undefined, s.client);
+    assert.equal(listed.find((x: any) => x.id === mine.id).cancel_hours, 1);
     await ok('POST', `/me/class-reservations/${mine.id}/cancel`, {}, s.client);
+    await ok('PUT', '/settings', { cancelHours: 1, academies: [{ id: s.academyA.id, cancelHours: null }], sites: [{ id: s.siteA1.id, cancelHours: null }] }, s.admin);
     assert.equal((await ok('GET', '/me/class-reservations', undefined, s.client)).length, 0);
   });
 
@@ -314,10 +324,19 @@ describe('AcademiaPass API', () => {
     // RQ31: sin un plan de reservas que incluya la sede no puede reservar
     assert.equal((await call('POST', '/me/bookings', body, s.client)).body.code, 'NO_PLAN');
     const planRes = await ok('POST', '/plans', { name: 'Reservas Yoga', kind: 'reservations', units: 4, validityDays: 30, price: 50000, academyIds: [s.academyB.id], allSites: true }, s.admin);
-    await ok('POST', '/memberships', { clientId: s.clientId, planId: planRes.id }, s.admin);
+    const mRes = await ok('POST', '/memberships', { clientId: s.clientId, planId: planRes.id }, s.admin);
     const b = await ok('POST', '/me/bookings', body, s.client);
     assert.equal(b.kind, 'rental');
-    await ok('POST', '/payments', { bookingId: b.id, amount: 30000, method: 'tarjeta' }, s.admin);
+    // RQ34: el pago necesita cliente y plan; la reserva solo se asocia si es del mismo cliente
+    assert.equal((await call('POST', '/payments', { bookingId: b.id, amount: 30000, method: 'tarjeta' }, s.admin)).status, 400);
+    const otherClient = (await ok('GET', '/clients?q=cupo.dos', undefined, s.admin))[0];
+    const otherM = (await ok('GET', `/clients/${otherClient.id}`, undefined, s.admin)).memberships[0];
+    assert.equal((await call('POST', '/payments', { membershipId: otherM.id, bookingId: b.id, amount: 30000, method: 'tarjeta' }, s.admin)).status, 400);
+    assert.equal((await call('POST', '/payments', { clientId: s.clientId, membershipId: otherM.id, amount: 1000, method: 'efectivo' }, s.admin)).status, 400);
+    await ok('POST', '/payments', { clientId: s.clientId, membershipId: mRes.id, bookingId: b.id, amount: 30000, method: 'tarjeta' }, s.admin);
+    const pays = await ok('GET', `/payments?clientId=${s.clientId}`, undefined, s.admin);
+    assert.ok(pays.every((x: any) => x.client_id === s.clientId && x.membership_id), 'todo pago con cliente y plan');
+    assert.ok(pays.some((x: any) => x.concept === 'Plan: Reservas Yoga · Reserva: Reserva de Carlos Cliente'));
     const day = new Date(start.getTime() - 5 * 3600_000).toISOString().slice(0, 10);
     const listAdmin = await ok('GET', `/bookings?from=${day}&to=${day}&spaceId=${s.yogaRoom.id}`, undefined, s.admin);
     assert.equal(listAdmin[0].client_name, 'Carlos Cliente');

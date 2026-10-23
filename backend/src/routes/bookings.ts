@@ -184,7 +184,7 @@ export function bookingRoutes(db: Db) {
     const canStaff = req.user.permissions.includes(b.kind === 'class' ? 'classes' : 'bookings');
     const isOwner = req.user.role === 'client' && b.client_id === req.user.id;
     if (!canStaff && !isOwner) throw new HttpError(403, 'No tienes permiso para esta acción', 'FORBIDDEN');
-    if (isOwner && !canStaff) await assertCanCancel(db, req.user.tenantId, b.starts_at);
+    if (isOwner && !canStaff) await assertCanCancel(db, req.user.tenantId, b.starts_at, b.site_id);
     await db.query(`UPDATE bookings SET status = 'cancelled' WHERE id = $1`, [b.id]);
     res.json({ ok: true });
   });

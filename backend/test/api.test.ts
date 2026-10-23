@@ -20,7 +20,7 @@ const { ensureAdmin } = await import('../src/bootstrap.ts');
 const { describePg } = await import('../src/db.ts');
 const { settleMissedReservations } = await import('../src/lib/scheduling.ts');
 const { sendReminders, sendPlanNotices } = await import('../src/lib/notifications.ts');
-const { setMailSender } = await import('../src/lib/mailer.ts');
+const { setMailSender, sendMail } = await import('../src/lib/mailer.ts');
 
 let base = '';
 let close = () => {};
@@ -614,6 +614,36 @@ describe('AcademiaPass API', () => {
       assert.equal((await call('GET', '/notifications', undefined, s.client)).status, 403);
     } finally {
       setMailSender(null);
+    }
+  });
+  it('envia los correos por la API de Resend o de Brevo cuando hay clave (despliegue en Railway)', async () => {
+    const realFetch = globalThis.fetch;
+    const calls: { url: string; headers: any; body: any }[] = [];
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (!String(url).includes('resend.com') && !String(url).includes('brevo.com')) return realFetch(url, init);
+      calls.push({ url: String(url), headers: init.headers, body: JSON.parse(init.body) });
+      return new Response('{"id":"x"}', { status: 200 });
+    }) as typeof fetch;
+    const env = { ...process.env };
+    try {
+      const mail = { to: 'carlos@example.com', subject: 'Prueba', text: 'hola', html: '<p>hola</p>' };
+      assert.equal(await sendMail(mail), 'logged', 'sin proveedor solo registra');
+      process.env.MAIL_FROM = 'AcademiaPass <avisos@academia.co>';
+      process.env.RESEND_API_KEY = 're_prueba';
+      assert.equal(await sendMail(mail), 'sent');
+      assert.equal(calls[0].url, 'https://api.resend.com/emails');
+      assert.equal(calls[0].headers.authorization, 'Bearer re_prueba');
+      assert.deepEqual(calls[0].body.to, ['carlos@example.com']);
+      assert.equal(calls[0].body.from, 'AcademiaPass <avisos@academia.co>');
+      delete process.env.RESEND_API_KEY;
+      process.env.BREVO_API_KEY = 'xkeysib-prueba';
+      await sendMail(mail);
+      assert.equal(calls[1].url, 'https://api.brevo.com/v3/smtp/email');
+      assert.deepEqual(calls[1].body.sender, { name: 'AcademiaPass', email: 'avisos@academia.co' });
+      assert.equal((await ok('GET', '/notification-settings', undefined, s.admin)).mailConfigured, true);
+    } finally {
+      globalThis.fetch = realFetch;
+      for (const k of ['MAIL_FROM', 'RESEND_API_KEY', 'BREVO_API_KEY']) { if (env[k] === undefined) delete process.env[k]; else process.env[k] = env[k]; }
     }
   });
 });

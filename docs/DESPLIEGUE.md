@@ -1,5 +1,8 @@
 # Despliegue y compilación
 
+> **Servidor siempre en línea:** ver [DESPLIEGUE_ORACLE.md](DESPLIEGUE_ORACLE.md) (máquina virtual gratuita de
+> Oracle con Docker y HTTPS). El plan gratis de Render se apaga sin uso y no sirve para los correos automáticos.
+
 ## 1. Base de datos (Neon) y API + web en la nube (Render)
 
 La cuenta gratuita de Render solo permite **una** base de datos activa (ya usada por otro proyecto), así que
@@ -65,8 +68,10 @@ Ver `backend/.env.example`: `DATABASE_URL`, `PGSSL`, `JWT_SECRET` (obligatoria e
 
 ### Correos (RQ63, RQ64)
 
-Los recordatorios y avisos de vencimiento salen por SMTP. Se configuran solo como variables de entorno (en
-Render: *Environment*; en el PC local: variables de usuario de Windows), nunca en el código:
+Los recordatorios y avisos de vencimiento salen por la API de **Resend** (`RESEND_API_KEY`), la de **Brevo**
+(`BREVO_API_KEY`) o por SMTP, en ese orden de prioridad, con el remitente `MAIL_FROM`. Las APIs funcionan aunque
+el servidor bloquee los puertos SMTP. Se configuran solo como variables de entorno (en Oracle: `deploy/oracle/.env`;
+en el PC local: variables de usuario de Windows), nunca en el código. Para SMTP:
 
 | Variable | Ejemplo | Nota |
 |---|---|---|

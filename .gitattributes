@@ -1,2 +1,6 @@
 * text=auto
 *.sh text eol=lf
+# Configuracion que corre en Linux (maquina virtual de Oracle) con fin de linea LF
+Caddyfile text eol=lf
+Dockerfile text eol=lf
+deploy/** text eol=lf

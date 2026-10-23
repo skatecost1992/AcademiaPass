@@ -1,7 +1,10 @@
 /**
- * Envio de correos (RQ63, RQ64) por SMTP. Se configura con variables de entorno, nunca en el codigo:
- *   SMTP_HOST, SMTP_PORT (587), SMTP_SECURE (true para el puerto 465), SMTP_USER, SMTP_PASS y MAIL_FROM.
- * Sin SMTP_HOST el correo no sale: queda en el registro del servidor y en la tabla notifications como 'logged'.
+ * Envio de correos (RQ63, RQ64). Se configura con variables de entorno, nunca en el codigo. En orden de prioridad:
+ *   1. RESEND_API_KEY: API HTTPS de Resend (sirve en Railway, que bloquea SMTP en el plan Hobby).
+ *   2. BREVO_API_KEY : API HTTPS de Brevo (permite remitente verificado sin dominio propio).
+ *   3. SMTP_HOST, SMTP_PORT (587), SMTP_SECURE (true para 465), SMTP_USER, SMTP_PASS.
+ * MAIL_FROM es el remitente ("Nombre <correo@dominio>"). Sin ninguna de las tres opciones el correo no sale:
+ * queda en el registro del servidor y en la tabla notifications como 'logged'.
  */
 import nodemailer, { type Transporter } from 'nodemailer';
 
@@ -16,14 +19,45 @@ export function setMailSender(sender: Sender | null) {
   override = sender;
 }
 
-export const mailConfigured = () => !!process.env.SMTP_HOST || !!override;
+export const mailProvider = () =>
+  override ? 'test' : process.env.RESEND_API_KEY ? 'resend' : process.env.BREVO_API_KEY ? 'brevo' : process.env.SMTP_HOST ? 'smtp' : null;
+export const mailConfigured = () => mailProvider() != null;
+
+/** "Nombre <correo@dominio>" -> { name, email } */
+function parseFrom(from: string) {
+  const m = /^\s*(.*?)\s*<([^>]+)>\s*$/.exec(from);
+  return m ? { name: m[1].replace(/^"|"$/g, '') || undefined, email: m[2] } : { name: undefined, email: from.trim() };
+}
+
+async function postJson(url: string, headers: Record<string, string>, body: unknown) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`${new URL(url).host} respondió ${res.status}: ${(await res.text()).slice(0, 300)}`);
+}
 
 export async function sendMail(mail: Mail): Promise<'sent' | 'logged'> {
   if (override) {
     await override(mail);
     return 'sent';
   }
-  if (!process.env.SMTP_HOST) return 'logged';
+  const provider = mailProvider();
+  if (!provider) return 'logged';
+  const from = process.env.MAIL_FROM ?? process.env.SMTP_USER ?? '';
+  if (provider !== 'smtp' && !from) throw new Error('Falta la variable MAIL_FROM (remitente)');
+  if (provider === 'resend') {
+    await postJson('https://api.resend.com/emails', { authorization: `Bearer ${process.env.RESEND_API_KEY}` },
+      { from, to: [mail.to], subject: mail.subject, text: mail.text, html: mail.html });
+    return 'sent';
+  }
+  if (provider === 'brevo') {
+    await postJson('https://api.brevo.com/v3/smtp/email', { 'api-key': process.env.BREVO_API_KEY! },
+      { sender: parseFrom(from), to: [{ email: mail.to }], subject: mail.subject, textContent: mail.text, htmlContent: mail.html });
+    return 'sent';
+  }
   if (!transport) {
     const port = Number(process.env.SMTP_PORT ?? 587);
     transport = nodemailer.createTransport({
@@ -34,7 +68,7 @@ export async function sendMail(mail: Mail): Promise<'sent' | 'logged'> {
       connectionTimeout: 15_000,
     });
   }
-  await transport.sendMail({ from: process.env.MAIL_FROM ?? process.env.SMTP_USER, ...mail });
+  await transport.sendMail({ from, ...mail });
   return 'sent';
 }
 

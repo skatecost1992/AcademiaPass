@@ -1,0 +1,5 @@
+# Certificado HTTPS automatico para el dominio (DOMAIN en .env) y proxy hacia la API
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy api:8080
+}

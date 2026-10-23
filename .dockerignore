@@ -1,0 +1,13 @@
+**/node_modules
+**/.data
+**/.env
+**/*.log
+.git
+resources
+docs
+app-ios
+app-android/android
+app-android/.expo
+app-android/dist
+backend/public
+backend/test

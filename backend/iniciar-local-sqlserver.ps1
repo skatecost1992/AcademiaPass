@@ -17,7 +17,7 @@ $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
 foreach ($name in 'ACADEMIAPASS_APP_PASSWORD', 'ACADEMIAPASS_SQL_SERVER', 'ACADEMIAPASS_DB_NAME', 'ACADEMIAPASS_APP_USER', 'JWT_SECRET',
-                 'SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASS', 'MAIL_FROM') {
+                 'RESEND_API_KEY', 'BREVO_API_KEY', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASS', 'MAIL_FROM') {
     if (-not [Environment]::GetEnvironmentVariable($name, 'Process')) {
         $v = [Environment]::GetEnvironmentVariable($name, 'User')
         if (-not $v) { $v = [Environment]::GetEnvironmentVariable($name, 'Machine') }

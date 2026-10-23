@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Text } from 'react-native';
 import { Badge, Button, Card, Chips, Empty, Field, ListItem, Loader, Muted, RowWrap, Screen, Section, Toggle, colors, errorText, notify, useLoad } from '../components/ui';
 import { post, put } from '../lib/api';
 import { fmtDateTime } from '../lib/format';
@@ -9,7 +10,7 @@ interface SentMail { id: number; kind: string; email: string; subject: string; s
 const KIND: Record<string, string> = { day_before: '1 día antes', hours_before: '3 horas antes', plan_expiring: 'Plan por vencer', plan_expired: 'Plan vencido' };
 const STATUS: Record<SentMail['status'], { text: string; tone: 'success' | 'muted' | 'danger' }> = {
   sent: { text: 'Enviado', tone: 'success' },
-  logged: { text: 'Sin SMTP', tone: 'muted' },
+  logged: { text: 'Sin envío', tone: 'muted' },
   pending: { text: 'Enviando', tone: 'muted' },
   failed: { text: 'Falló', tone: 'danger' },
 };
@@ -59,11 +60,18 @@ export default function EmailSettings() {
           {!f.mailConfigured ? (
             <Card style={{ backgroundColor: colors.dangerSoft }}>
               <Muted style={{ color: colors.danger }}>
-                El servidor no tiene configurado el envío de correos (SMTP). Los avisos quedan registrados pero no salen.
-                Configura SMTP_HOST, SMTP_USER, SMTP_PASS y MAIL_FROM en el servidor.
+                El servidor no tiene configurado el envío de correos. Los avisos quedan registrados pero no salen.
+                Para enviarlos desde tu Gmail configura en el servidor GMAIL_USER y GMAIL_APP_PASSWORD (o la API de Gmail):
+                ver docs/CORREO_GMAIL.md.
               </Muted>
             </Card>
-          ) : null}
+          ) : (
+            // RQ67: desde que cuenta salen los correos
+            <Card>
+              <Muted>Los correos salen desde <Text style={{ fontWeight: '700', color: colors.text }}>{f.mailFrom ?? '—'}</Text>
+                {f.mailProvider === 'gmail-api' ? ' (tu Gmail, por la API de Gmail)' : f.mailProvider === 'gmail' ? ' (tu Gmail)' : f.mailProvider ? ` (${f.mailProvider})` : ''}.</Muted>
+            </Card>
+          )}
           <Section title="Recordatorios de reservas y clases">
             <Card>
               <Toggle label={`${f.dayBeforeHours} horas antes`} value={f.dayBefore} onChange={(v) => setF({ ...f, dayBefore: v })} hint="Un día antes de cada reserva de espacio o cupo en clase." />

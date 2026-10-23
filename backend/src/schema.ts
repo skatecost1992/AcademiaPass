@@ -314,4 +314,33 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS notifications_once ON notifications (user_id, kind, ref_id);
 CREATE INDEX IF NOT EXISTS notifications_tenant_idx ON notifications (tenant_id, created_at);
+
+-- RQ66: solicitud a otro profesor para que cambie el horario de una o varias de sus sesiones. Si la acepta (en la
+-- app o desde el enlace del correo) sus sesiones pasan a la hora propuesta y se crean las de la clase que la pidio
+CREATE TABLE IF NOT EXISTS schedule_requests (
+  id serial PRIMARY KEY,
+  tenant_id int NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  class_id int NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+  target_teacher_id int NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+  requested_by int REFERENCES users(id) ON DELETE SET NULL,
+  message text,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled')),
+  response_note text,
+  token text NOT NULL UNIQUE,
+  resolved_by int REFERENCES users(id) ON DELETE SET NULL,
+  resolved_via text,
+  resolved_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS schedule_request_items (
+  id serial PRIMARY KEY,
+  request_id int NOT NULL REFERENCES schedule_requests(id) ON DELETE CASCADE,
+  booking_id int NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+  wanted_starts_at timestamptz NOT NULL,
+  wanted_ends_at timestamptz NOT NULL,
+  proposed_starts_at timestamptz NOT NULL,
+  proposed_ends_at timestamptz NOT NULL,
+  new_booking_id int REFERENCES bookings(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS schedule_requests_tenant_idx ON schedule_requests (tenant_id, status);
 `;

@@ -78,6 +78,8 @@ export interface OrgNotificationSettings {
   dayBeforeHours: number;
   hoursBeforeHours: number;
   mailConfigured: boolean;
+  mailProvider: 'gmail-api' | 'gmail' | 'resend' | 'brevo' | 'smtp' | 'test' | null; // RQ67
+  mailFrom: string | null;
 }
 
 /** Preferencias de correo del usuario */
@@ -87,4 +89,18 @@ export interface MyNotifications {
   hoursBefore: boolean;
   plan: boolean;
   organization: OrgNotificationSettings;
+}
+
+/** RQ66: reserva con la que se cruza una sesion, y sesion que no se pudo programar */
+export interface Clash { bookingId: number; kind: 'class' | 'rental'; title: string; startsAt: string; endsAt: string; spaceId: number; classId: number | null; teacherId: number | null; teacherName: string | null; teacherHasEmail: boolean }
+export interface SessionConflict { startsAt: string; endsAt: string; code?: string; message: string; available?: string[]; clashes?: Clash[] }
+
+/** RQ66: solicitud de cambio de horario a otro profesor */
+export interface ScheduleRequest {
+  id: number; status: 'pending' | 'accepted' | 'rejected' | 'cancelled'; message: string | null; response_note: string | null;
+  resolved_via: 'app' | 'email' | null; resolved_at: string | null; created_at: string; class_id: number; class_name: string;
+  requester_teacher_name: string | null; target_teacher_id: number; target_teacher_name: string; target_teacher_has_email: boolean;
+  requested_by_name: string | null; resolved_by_name: string | null;
+  items: { id: number; booking_id: number; title: string; starts_at: string; ends_at: string; wanted_starts_at: string; wanted_ends_at: string;
+    proposed_starts_at: string; proposed_ends_at: string; new_booking_id: number | null; space_name: string; site_name: string }[];
 }

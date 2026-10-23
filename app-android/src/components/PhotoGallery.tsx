@@ -6,7 +6,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { del, get, post, qs } from '../lib/api';
-import { dataUri, pickPhoto } from '../lib/photos';
+import { MAX_PER_OWNER, MAX_PER_PICK, dataUri, pickPhoto, pickPhotos, processAsset } from '../lib/photos';
 import { Button, Muted, RowWrap, colors, confirm, errorText, notify, useLoad } from './ui';
 
 interface PhotoMeta { id: number; mime: string; width: number | null; height: number | null; size_bytes: number }
@@ -37,22 +37,56 @@ function Thumb({ photo, onOpen }: { photo: PhotoMeta; onOpen: (uri: string) => v
 export function PhotoGallery({ ownerType, ownerId, editable }: { ownerType: 'site' | 'space'; ownerId: number | null; editable: boolean }) {
   const list = useLoad<PhotoMeta[]>(ownerId ? `/photos${qs({ ownerType, ownerId })}` : null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
   const [open, setOpen] = useState<{ uri: string; id: number } | null>(null);
 
   if (!ownerId) return <Muted>Guarda primero para poder agregar fotos.</Muted>;
 
-  const add = async (source: 'camera' | 'library') => {
+  const upload = async (photo: Awaited<ReturnType<typeof processAsset>>) => {
+    const saved = await post<PhotoMeta>('/photos', { ownerType, ownerId, ...photo });
+    cache.set(saved.id, dataUri(photo.mime, photo.data));
+  };
+
+  const takePhoto = async () => {
     try {
-      const photo = await pickPhoto(source);
+      const photo = await pickPhoto('camera');
       if (!photo) return;
       setBusy(true);
-      const saved = await post<PhotoMeta>('/photos', { ownerType, ownerId, ...photo });
-      cache.set(saved.id, dataUri(photo.mime, photo.data));
+      await upload(photo);
       await list.reload();
     } catch (e) {
       notify('No se pudo cargar la foto', errorText(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  // RQ68: hasta 15 fotos de la galeria a la vez; se suben una por una mostrando el avance
+  const fromLibrary = async () => {
+    const room = MAX_PER_OWNER - (list.data?.length ?? 0);
+    if (room <= 0) return notify('Límite de fotos', `Ya tiene ${MAX_PER_OWNER} fotos. Elimina alguna para agregar más.`);
+    let done = 0;
+    const failed: string[] = [];
+    try {
+      const assets = await pickPhotos(Math.min(MAX_PER_PICK, room));
+      if (!assets.length) return;
+      setBusy(true);
+      for (const [i, asset] of assets.entries()) {
+        setProgress(`Subiendo ${i + 1} de ${assets.length}…`);
+        try {
+          await upload(await processAsset(asset));
+          done++;
+        } catch (e) {
+          failed.push(`Foto ${i + 1}: ${errorText(e)}`);
+        }
+      }
+      await list.reload();
+      if (failed.length) notify(`Se cargaron ${done} de ${assets.length} fotos`, failed.slice(0, 3).join('\n'));
+    } catch (e) {
+      notify('No se pudieron cargar las fotos', errorText(e));
+    } finally {
+      setBusy(false);
+      setProgress(null);
     }
   };
 
@@ -78,11 +112,12 @@ export function PhotoGallery({ ownerType, ownerId, editable }: { ownerType: 'sit
           <Thumb key={p.id} photo={p} onOpen={(uri) => setOpen({ uri, id: p.id })} />
         ))}
       </ScrollView>
-      {photos.length ? <Muted style={{ fontSize: 12 }}>{photos.length} foto(s) · {totalKb} KB en total</Muted> : null}
+      {photos.length ? <Muted style={{ fontSize: 12 }}>{photos.length} de {MAX_PER_OWNER} foto(s) · {totalKb} KB en total</Muted> : null}
+      {progress ? <Muted style={{ fontSize: 12, color: colors.primary }}>{progress}</Muted> : null}
       {editable ? (
         <RowWrap style={{ marginTop: 8 }}>
-          <Button small icon="camera-outline" label="Tomar foto" variant="secondary" onPress={() => add('camera')} loading={busy} />
-          <Button small icon="images-outline" label="Galería" variant="secondary" onPress={() => add('library')} disabled={busy} />
+          <Button small icon="camera-outline" label="Tomar foto" variant="secondary" onPress={takePhoto} loading={busy && !progress} disabled={busy} />
+          <Button small icon="images-outline" label={`Galería (hasta ${MAX_PER_PICK})`} variant="secondary" onPress={fromLibrary} loading={!!progress} disabled={busy} />
         </RowWrap>
       ) : null}
       <Modal visible={!!open} transparent animationType="fade" onRequestClose={() => setOpen(null)}>

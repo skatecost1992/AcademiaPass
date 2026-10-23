@@ -44,16 +44,22 @@ interface DayAvailability { available: string[]; capacity: number; busy: { from:
  * Ocupacion del espacio en el dia elegido. RQ60: el cliente solo ve cada franja como "Reservado" y los cupos
  * libres, sin datos de quien reservo; el personal ve ademas el titulo de cada reserva.
  */
-function DayAgenda({ spaceId, date, anonymous }: { spaceId: number; date: string; anonymous: boolean }) {
+export function DayAgenda({ spaceId, date, anonymous, onPick }: { spaceId: number; date: string; anonymous: boolean; onPick?: (from: string, to: string) => void }) {
   const list = useLoad<Booking[]>(!anonymous && isDate(date) ? `/bookings${qs({ spaceId, from: date, to: date })}` : null);
   const day = useLoad<DayAvailability>(isDate(date) ? `/spaces/${spaceId}/availability${qs({ date })}` : null);
   const busy = day.data?.busy ?? [];
   return (
     <Card>
       <Text style={{ fontWeight: '700', color: colors.text, marginBottom: 4 }}>Ocupación del espacio ese día</Text>
-      <Muted style={{ fontSize: 12, marginBottom: 4, color: colors.success }}>
-        Horarios disponibles: {day.data ? (day.data.available.length ? day.data.available.join(' · ') : 'ninguno ese día') : '…'}
-      </Muted>
+      {onPick && day.data?.available.length ? (
+        // RQ65: tocar una franja libre la usa como horario
+        <Chips label="Horarios disponibles (toca uno para usarlo)" options={day.data.available.map((a) => ({ value: a, label: a.replace('-', '–') }))}
+          value={undefined} onChange={(a) => { const [from, to] = a.split('-'); onPick(from, to); }} />
+      ) : (
+        <Muted style={{ fontSize: 12, marginBottom: 4, color: colors.success }}>
+          Horarios disponibles: {day.data ? (day.data.available.length ? day.data.available.join(' · ') : 'ninguno ese día') : '…'}
+        </Muted>
+      )}
       {anonymous ? (
         busy.length === 0 ? <Muted>Sin reservas ese día.</Muted> : busy.map((b, i) => (
           <InfoRow key={i} label={`${b.from}–${b.to} · ${b.label}`} value={b.spotsLeft > 0 ? `${b.spotsLeft} cupo(s) libre(s)` : 'Sin cupos'} />

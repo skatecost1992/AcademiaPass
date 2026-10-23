@@ -16,9 +16,10 @@ import { dateStr, dayBounds, id, idList, localParts, isoDateTime, optId, optText
 import { assertCanCancel, assertClientPlan, assertNoOverlap, myReservationIds } from './reservations.ts';
 import { visibleAcademyIds } from './setup.ts';
 
-const WEEK_MS = 7 * 24 * 3600_000;
+const DAY_MS = 24 * 3600_000;
+const WEEK_MS = 7 * DAY_MS;
 
-const bookingBody = z.object({
+export const bookingBody = z.object({
   spaceId: id,
   kind: z.enum(['class', 'rental']),
   classId: optId.nullable(),
@@ -30,6 +31,8 @@ const bookingBody = z.object({
   groupSize: z.coerce.number().int().positive().optional(),
   notes: optText(),
   repeatWeeks: z.coerce.number().int().min(1).max(26).default(1), // crea la misma reserva N semanas seguidas
+  // RQ65: periodica en varios dias de la semana (0 = domingo); vacio = solo el dia de la fecha inicial
+  weekdays: z.array(z.coerce.number().int().min(0).max(6)).max(7).optional(),
 });
 
 export const BOOKING_SELECT = `
@@ -48,13 +51,13 @@ export const BOOKING_SELECT = `
     LEFT JOIN users cu ON cu.id = b.client_id`;
 
 /** RQ62: un profesor solo puede estar en una sede (y una clase) a la vez */
-async function assertTeacherFree(db: Db, teacherId: number, start: Date, end: Date) {
+export async function assertTeacherFree(db: Db, teacherId: number, start: Date, end: Date, excludeBookingId?: number) {
   const [clash] = await db.query(
     `SELECT b.title, b.starts_at, b.ends_at, s.name AS site_name, sp.name AS space_name, t.full_name
        FROM bookings b JOIN sites s ON s.id = b.site_id JOIN spaces sp ON sp.id = b.space_id JOIN teachers t ON t.id = b.teacher_id
-      WHERE b.teacher_id = $1 AND b.status = 'confirmed' AND b.starts_at < $3 AND b.ends_at > $2
+      WHERE b.teacher_id = $1 AND b.status = 'confirmed' AND b.starts_at < $3 AND b.ends_at > $2 AND b.id <> $4
       ORDER BY b.starts_at`,
-    [teacherId, start, end],
+    [teacherId, start, end, excludeBookingId ?? 0],
   );
   if (clash) {
     const hm = (d: Date | string) => localParts(new Date(d)).time;
@@ -64,7 +67,7 @@ async function assertTeacherFree(db: Db, teacherId: number, start: Date, end: Da
   }
 }
 
-async function loadSpace(db: Db, spaceId: number, tenantId: number) {
+export async function loadSpace(db: Db, spaceId: number, tenantId: number) {
   const [sp] = await db.query(
     `SELECT sp.*, s.name AS site_name, s.opening_hours AS site_hours, s.academy_id, s.active AS site_active
        FROM spaces sp JOIN sites s ON s.id = sp.site_id WHERE sp.id = $1 AND sp.tenant_id = $2`,
@@ -77,9 +80,74 @@ async function loadSpace(db: Db, spaceId: number, tenantId: number) {
     site_name: string; site_hours: any[]; opening_hours: any[] | null; academy_id: number;
   };
 }
+export type LoadedSpace = Awaited<ReturnType<typeof loadSpace>>;
 
-/** Crea una o varias reservas semanales validando cada una; si alguna choca no se guarda ninguna */
-async function createBookings(db: Db, req: Request, b: z.infer<typeof bookingBody>) {
+/** Reservas confirmadas del espacio que se cruzan con [start, end), con su profesor (RQ66) */
+export async function spaceClashes(db: Db, spaceId: number, start: Date, end: Date, excludeBookingId?: number) {
+  const rows = await db.query(
+    `SELECT b.id, b.kind, b.title, b.starts_at, b.ends_at, b.space_id, b.class_id, b.teacher_id, t.full_name AS teacher_name, t.email AS teacher_email
+       FROM bookings b LEFT JOIN teachers t ON t.id = b.teacher_id
+      WHERE b.space_id = $1 AND b.status = 'confirmed' AND b.starts_at < $3 AND b.ends_at > $2 AND b.id <> $4
+      ORDER BY b.starts_at`,
+    [spaceId, start, end, excludeBookingId ?? 0],
+  );
+  return rows.map((x) => ({
+    bookingId: x.id as number, kind: x.kind as 'class' | 'rental', title: x.title as string, startsAt: x.starts_at, endsAt: x.ends_at,
+    spaceId: x.space_id as number, classId: x.class_id as number | null, teacherId: x.teacher_id as number | null,
+    teacherName: x.teacher_name as string | null, teacherHasEmail: !!x.teacher_email,
+  }));
+}
+export type SpaceClash = Awaited<ReturnType<typeof spaceClashes>>[number];
+
+/**
+ * Valida que una reserva quepa en [s, e): horario de la sede y del espacio, horizonte, aforo y espacio libre,
+ * cliente y profesor sin cruces. Si el espacio esta ocupado sugiere las franjas libres (RQ42) y, para el
+ * personal, informa con que reservas y profesores se cruza (RQ66).
+ */
+export async function assertSlotAvailable(q: Db, tenantId: number, space: LoadedSpace, s: Date, e: Date, o: {
+  groupSize: number; teacherId?: number | null; clientId?: number | null; excludeBookingId?: number; staff?: boolean;
+}) {
+  assertWithinOpeningHours(space.site_name, space.site_hours, s, e);
+  // RQ40: si el espacio tiene su propio horario de disponibilidad, tambien debe caber en el
+  if (space.opening_hours?.length) assertWithinOpeningHours(space.name, space.opening_hours, s, e, 'el espacio');
+  await assertWithinHorizon(q, tenantId, s); // RQ47
+  try {
+    await assertSpaceAvailable(q, space, s, e, o.groupSize, o.excludeBookingId);
+  } catch (err) {
+    if (err instanceof HttpError && (err.code === 'SPACE_TAKEN' || err.code === 'CAPACITY_FULL')) {
+      const day = localParts(s).date;
+      const available = await freeSlots(q, space.id, day);
+      err.message += available.length ? `. Horarios disponibles ese día: ${available.join(', ')}` : '. No quedan horarios disponibles ese día.';
+      err.extra = { ...err.extra, available, date: day, ...(o.staff ? { clashes: await spaceClashes(q, space.id, s, e, o.excludeBookingId) } : {}) };
+    }
+    throw err;
+  }
+  if (o.clientId) await assertNoOverlap(q, o.clientId, s, e, o.excludeBookingId); // RQ38
+  if (o.teacherId) await assertTeacherFree(q, o.teacherId, s, e, o.excludeBookingId); // RQ62
+}
+
+/**
+ * Inicios de cada repeticion: N semanas desde la fecha inicial y, si se indican dias de la semana (RQ65), en cada
+ * uno de esos dias a la misma hora. Desplazamientos en milisegundos desde el inicio, ordenados.
+ */
+function occurrenceOffsets(start: Date, repeatWeeks: number, weekdays?: number[]) {
+  const first = localParts(start).day;
+  const days = weekdays?.length ? [...new Set(weekdays)].map((d) => (d - first + 7) % 7).sort((a, b) => a - b) : [0];
+  const out: number[] = [];
+  for (let w = 0; w < repeatWeeks; w++) for (const d of days) out.push(w * WEEK_MS + d * DAY_MS);
+  return out;
+}
+
+/** Sesion que no se pudo crear (con `skipConflicts`): fecha, motivo y reservas con las que choca (RQ66) */
+export interface BookingConflict {
+  startsAt: string; endsAt: string; code?: string; message: string; available?: string[]; clashes?: SpaceClash[];
+}
+
+/**
+ * Crea una o varias reservas semanales validando cada una. Por defecto, si alguna choca no se guarda ninguna; con
+ * `skipConflicts` se guardan las que caben y se devuelven las que chocaron (para negociar el horario, RQ66).
+ */
+export async function createBookingsDetailed(db: Db, req: Request, b: z.infer<typeof bookingBody>, opts: { skipConflicts?: boolean } = {}) {
   const tenantId = req.user.tenantId;
   const start = new Date(b.startsAt);
   const end = new Date(b.endsAt);
@@ -116,33 +184,23 @@ async function createBookings(db: Db, req: Request, b: z.infer<typeof bookingBod
   }
   if (!title) throw new HttpError(400, 'title: Escribe un título para la reserva');
   groupSize = groupSize ?? 1;
+  const staff = isStaffish(req.user);
 
   return db.tx(async (q) => {
-    const created = [];
-    for (let i = 0; i < b.repeatWeeks; i++) {
-      const s = new Date(start.getTime() + i * WEEK_MS);
-      const e = new Date(end.getTime() + i * WEEK_MS);
+    const created: number[] = [];
+    const conflicts: BookingConflict[] = [];
+    const offsets = occurrenceOffsets(start, b.repeatWeeks, b.weekdays);
+    for (const offset of offsets) {
+      const s = new Date(start.getTime() + offset);
+      const e = new Date(end.getTime() + offset);
       try {
-        assertWithinOpeningHours(space.site_name, space.site_hours, s, e);
-        // RQ40: si el espacio tiene su propio horario de disponibilidad, tambien debe caber en el
-        if (space.opening_hours?.length) assertWithinOpeningHours(space.name, space.opening_hours, s, e, 'el espacio');
-        await assertWithinHorizon(q, tenantId, s); // RQ47
-        try {
-          await assertSpaceAvailable(q, space, s, e, groupSize!);
-        } catch (err) {
-          // RQ42: si el horario esta ocupado, se sugieren las franjas libres de ese dia
-          if (err instanceof HttpError && (err.code === 'SPACE_TAKEN' || err.code === 'CAPACITY_FULL')) {
-            const day = localParts(s).date;
-            const available = await freeSlots(q, space.id, day);
-            err.message += available.length ? `. Horarios disponibles ese día: ${available.join(', ')}` : '. No quedan horarios disponibles ese día.';
-            err.extra = { ...err.extra, available, date: day };
-          }
-          throw err;
-        }
-        if (b.clientId) await assertNoOverlap(q, b.clientId, s, e); // RQ38
-        if (teacherId) await assertTeacherFree(q, teacherId, s, e); // RQ62
+        await assertSlotAvailable(q, tenantId, space, s, e, { groupSize: groupSize!, teacherId, clientId: b.clientId, staff });
       } catch (err) {
-        if (err instanceof HttpError && b.repeatWeeks > 1) err.message = `Semana ${i + 1} (${s.toISOString().slice(0, 10)}): ${err.message}`;
+        if (opts.skipConflicts && err instanceof HttpError && err.status === 409) {
+          conflicts.push({ startsAt: s.toISOString(), endsAt: e.toISOString(), code: err.code, message: err.message, ...(err.extra as object) });
+          continue;
+        }
+        if (err instanceof HttpError && offsets.length > 1) err.message = `Sesión del ${localParts(s).date}: ${err.message}`;
         throw err;
       }
       const [row] = await q.query(
@@ -152,8 +210,14 @@ async function createBookings(db: Db, req: Request, b: z.infer<typeof bookingBod
       );
       created.push(row.id);
     }
-    return q.query(`${BOOKING_SELECT} WHERE b.id IN ${idList(created)} ORDER BY b.starts_at`);
+    const rows = created.length ? await q.query(`${BOOKING_SELECT} WHERE b.id IN ${idList(created)} ORDER BY b.starts_at`) : [];
+    return { rows, conflicts };
   });
+}
+
+/** Crea una o varias reservas semanales validando cada una; si alguna choca no se guarda ninguna */
+export async function createBookings(db: Db, req: Request, b: z.infer<typeof bookingBody>) {
+  return (await createBookingsDetailed(db, req, b)).rows;
 }
 
 export function bookingRoutes(db: Db) {

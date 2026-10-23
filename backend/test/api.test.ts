@@ -620,8 +620,10 @@ describe('AcademiaPass API', () => {
     const realFetch = globalThis.fetch;
     const calls: { url: string; headers: any; body: any }[] = [];
     globalThis.fetch = (async (url: any, init: any) => {
-      if (!String(url).includes('resend.com') && !String(url).includes('brevo.com')) return realFetch(url, init);
-      calls.push({ url: String(url), headers: init.headers, body: JSON.parse(init.body) });
+      if (!/resend\.com|brevo\.com|googleapis\.com/.test(String(url))) return realFetch(url, init);
+      const isForm = String(init.headers['content-type']).includes('urlencoded');
+      calls.push({ url: String(url), headers: init.headers, body: isForm ? Object.fromEntries(new URLSearchParams(init.body)) : JSON.parse(init.body) });
+      if (String(url).includes('oauth2')) return new Response('{"access_token":"ya29.prueba","expires_in":3600}', { status: 200 });
       return new Response('{"id":"x"}', { status: 200 });
     }) as typeof fetch;
     const env = { ...process.env };
@@ -641,9 +643,109 @@ describe('AcademiaPass API', () => {
       assert.equal(calls[1].url, 'https://api.brevo.com/v3/smtp/email');
       assert.deepEqual(calls[1].body.sender, { name: 'AcademiaPass', email: 'avisos@academia.co' });
       assert.equal((await ok('GET', '/notification-settings', undefined, s.admin)).mailConfigured, true);
+
+      // RQ67: desde la cuenta de Gmail del administrador por la API de Gmail (HTTPS, sin servidor de correo)
+      delete process.env.MAIL_FROM;
+      Object.assign(process.env, { GMAIL_USER: 'academia@gmail.com', GMAIL_CLIENT_ID: 'cid', GMAIL_CLIENT_SECRET: 'csecret', GMAIL_REFRESH_TOKEN: '1//refresh' });
+      await sendMail(mail);
+      const [tokenCall, sendCall] = calls.slice(2);
+      assert.equal(tokenCall.url, 'https://oauth2.googleapis.com/token');
+      assert.equal(tokenCall.body.grant_type, 'refresh_token');
+      assert.equal(sendCall.url, 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send');
+      assert.equal(sendCall.headers.authorization, 'Bearer ya29.prueba');
+      const raw = Buffer.from(sendCall.body.raw, 'base64url').toString();
+      assert.ok(raw.includes('From: AcademiaPass <academia@gmail.com>') && raw.includes('To: carlos@example.com') && raw.includes('Subject: Prueba'));
+      const org = await ok('GET', '/notification-settings', undefined, s.admin);
+      assert.equal(org.mailProvider, 'gmail-api');
+      assert.equal(org.mailFrom, 'AcademiaPass <academia@gmail.com>');
     } finally {
       globalThis.fetch = realFetch;
-      for (const k of ['MAIL_FROM', 'RESEND_API_KEY', 'BREVO_API_KEY']) { if (env[k] === undefined) delete process.env[k]; else process.env[k] = env[k]; }
+      for (const k of ['MAIL_FROM', 'RESEND_API_KEY', 'BREVO_API_KEY', 'GMAIL_USER', 'GMAIL_CLIENT_ID', 'GMAIL_CLIENT_SECRET', 'GMAIL_REFRESH_TOKEN']) { if (env[k] === undefined) delete process.env[k]; else process.env[k] = env[k]; }
+    }
+  });
+  it('crea la clase con su horario, periodica en varios dias, sin superar el aforo (RQ65)', async () => {
+    const start = new Date(new Date(todayAt(7)).getTime() + 9 * 86400_000);
+    const end = new Date(start.getTime() + 3600_000);
+    const day0 = new Date(start.getTime() + OFFSET_MS).getUTCDay();
+    const base = { academyId: s.academyA.id, teacherId: s.teacherIn.id, spaceId: s.salon.id, defaultCapacity: 3 };
+    // El cupo de la sesion no puede superar el aforo del espacio (Salon 1: 3 personas)
+    const big = await call('POST', '/classes', { ...base, name: 'Muy llena', defaultCapacity: 4, schedule: { startsAt: start.toISOString(), endsAt: end.toISOString() } }, s.admin);
+    assert.equal(big.body.code, 'CAPACITY_EXCEEDED');
+    // Periodica: 2 semanas, el dia inicial y dos dias despues -> 4 sesiones con el cupo de la clase
+    const c = await ok('POST', '/classes', { ...base, name: 'Bachata temprano', schedule: { startsAt: start.toISOString(), endsAt: end.toISOString(), repeatWeeks: 2, weekdays: [day0, (day0 + 2) % 7] } }, s.admin);
+    assert.equal(c.sessions.length, 4);
+    assert.ok(c.sessions.every((x: any) => x.group_size === 3 && x.class_id === c.id && x.teacher_name === 'Pedro Interno'));
+    const gaps = c.sessions.map((x: any) => Math.round((new Date(x.starts_at).getTime() - start.getTime()) / 86400_000));
+    assert.deepEqual(gaps, [0, 2, 7, 9]);
+    // Si una sesion no cabe no se crea la clase y se informan los horarios libres
+    const clash = await call('POST', '/classes', { ...base, name: 'Choca', teacherId: s.teacherExt.id, schedule: { startsAt: start.toISOString(), endsAt: end.toISOString() } }, s.admin);
+    assert.equal(clash.status, 409);
+    assert.equal(clash.body.code, 'SPACE_TAKEN');
+    assert.ok(Array.isArray(clash.body.available) && clash.body.available.length > 0);
+    assert.ok(!(await ok('GET', '/classes', undefined, s.admin)).some((x: any) => x.name === 'Choca'), 'no queda la clase a medias');
+    // Sin horario se crea solo la clase
+    const plain = await ok('POST', '/classes', { ...base, name: 'Sin horario aun' }, s.admin);
+    assert.deepEqual(plain.sessions, []);
+  });
+  it('negocia el cruce con la clase de otro profesor pidiendole el cambio de horario (RQ66)', async () => {
+    const mails: { to: string; subject: string; text: string; html: string }[] = [];
+    setMailSender(async (m) => { mails.push(m); });
+    try {
+      const start = new Date(new Date(todayAt(7)).getTime() + 9 * 86400_000); // sesion de Bachata temprano (Pedro)
+      const end = new Date(start.getTime() + 3600_000);
+      const base66 = { academyId: s.academyA.id, teacherId: s.teacherExt.id, spaceId: s.salon.id, defaultCapacity: 2 };
+      // Con skipConflicts se crea la clase y se informa con que sesion y profesor choca
+      const c = await ok('POST', '/classes', { ...base66, name: 'Yoga de Laura', schedule: { startsAt: start.toISOString(), endsAt: end.toISOString(), repeatWeeks: 2, weekdays: [new Date(start.getTime() + OFFSET_MS).getUTCDay()], skipConflicts: true } }, s.admin);
+      assert.equal(c.sessions.length, 0);
+      assert.equal(c.conflicts.length, 2);
+      const clash = c.conflicts[0].clashes[0];
+      assert.equal(clash.teacherName, 'Pedro Interno');
+      assert.ok(c.conflicts[0].available.length > 0);
+      await database.query(`UPDATE teachers SET email = 'pedro@example.com' WHERE id = $1`, [s.teacherIn.id]);
+
+      const at = (h: number, plusDays = 0) => new Date(new Date(todayAt(h)).getTime() + (9 + plusDays) * 86400_000).toISOString();
+      const item = { bookingId: clash.bookingId, wantedStartsAt: start.toISOString(), wantedEndsAt: end.toISOString(), proposedStartsAt: at(9), proposedEndsAt: at(10) };
+      assert.equal((await call('POST', '/schedule-requests', { classId: c.id, items: [{ ...item, proposedStartsAt: at(7), proposedEndsAt: at(8) }] }, s.admin)).body.code, 'PROPOSAL_CLASH');
+      const req66 = await ok('POST', '/schedule-requests', { classId: c.id, message: 'Necesito el salón temprano', items: [item] }, s.admin);
+      assert.equal(req66.status, 'pending');
+      assert.equal(req66.emailed, true);
+      assert.equal((await call('POST', '/schedule-requests', { classId: c.id, items: [item] }, s.admin)).body.code, 'ALREADY_REQUESTED');
+      const mail = mails.find((m) => m.to === 'pedro@example.com')!;
+      assert.ok(mail.subject.includes('Yoga de Laura'));
+      const token = /token=([\w-]+)/.exec(mail.text)![1];
+
+      // El profesor responde desde el enlace del correo, sin iniciar sesion
+      const pageRes = await fetch(`${base}/schedule-requests/respond?token=${token}`);
+      assert.equal(pageRes.status, 200);
+      assert.ok((await pageRes.text()).includes('Aceptar el cambio'));
+      const done = await fetch(`${base}/schedule-requests/respond`, {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ token, action: 'accept', note: 'De acuerdo' }).toString(),
+      });
+      assert.equal(done.status, 200, await done.clone().text());
+      assert.ok((await done.text()).includes('Cambio aceptado'));
+      // Su sesion paso a las 9 y la clase que pidio el cambio quedo a las 7
+      const day = new Date(start.getTime() + OFFSET_MS).toISOString().slice(0, 10);
+      const agenda = await ok('GET', `/bookings?from=${day}&to=${day}&spaceId=${s.salon.id}`, undefined, s.admin);
+      assert.equal(new Date(agenda.find((x: any) => x.id === clash.bookingId).starts_at).toISOString(), at(9));
+      assert.ok(agenda.some((x: any) => x.class_id === c.id && new Date(x.starts_at).toISOString() === start.toISOString()));
+      const list = await ok('GET', '/schedule-requests', undefined, s.admin);
+      const mine = list.find((x: any) => x.id === req66.id);
+      assert.equal(mine.status, 'accepted');
+      assert.equal(mine.resolved_via, 'email');
+      assert.ok(mine.items[0].new_booking_id);
+      // Ya respondida no se puede volver a aplicar
+      const again = await fetch(`${base}/schedule-requests/respond`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token, action: 'reject' }).toString() });
+      assert.equal(again.status, 409);
+
+      // Segunda fecha: el personal la rechaza en nombre del profesor
+      const second = c.conflicts[1].clashes[0];
+      const r2 = await ok('POST', '/schedule-requests', { classId: c.id, items: [{ bookingId: second.bookingId, wantedStartsAt: c.conflicts[1].startsAt, wantedEndsAt: c.conflicts[1].endsAt, proposedStartsAt: at(11, 7), proposedEndsAt: at(12, 7) }] }, s.admin);
+      assert.equal((await ok('POST', `/schedule-requests/${r2.id}/reject`, { note: 'No puede' }, s.admin)).status, 'rejected');
+      assert.equal((await call('POST', `/schedule-requests/${r2.id}/accept`, {}, s.admin)).body.code, 'ALREADY_RESOLVED');
+      assert.equal((await call('GET', '/schedule-requests', undefined, s.client)).status, 403);
+    } finally {
+      setMailSender(null);
     }
   });
 });

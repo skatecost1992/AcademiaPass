@@ -8,7 +8,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { HttpError, requirePerm } from '../auth.ts';
 import type { Db } from '../db.ts';
-import { compose, mailConfigured, sendMail } from '../lib/mailer.ts';
+import { compose, mailConfigured, mailProvider, mailSender, sendMail } from '../lib/mailer.ts';
 import { DAY_BEFORE_H, HOURS_BEFORE_H, dispatchNotifications } from '../lib/notifications.ts';
 import { parse } from '../lib/util.ts';
 
@@ -29,7 +29,9 @@ export function notificationRoutes(db: Db) {
       planNoticeDays: t.plan_notice_days as number,
       dayBeforeHours: DAY_BEFORE_H,
       hoursBeforeHours: HOURS_BEFORE_H,
-      mailConfigured: mailConfigured(), // sin SMTP los correos solo quedan registrados
+      mailConfigured: mailConfigured(), // sin proveedor los correos solo quedan registrados
+      mailProvider: mailProvider(),     // RQ67: 'gmail-api' o 'gmail' = desde la cuenta de Gmail del administrador
+      mailFrom: mailSender(),
     };
   };
 

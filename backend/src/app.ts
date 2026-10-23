@@ -12,6 +12,7 @@ import { notificationRoutes } from './routes/notifications.ts';
 import { platformRoutes } from './routes/platform.ts';
 import { reportRoutes } from './routes/reports.ts';
 import { reservationRoutes } from './routes/reservations.ts';
+import { scheduleRequestPublicRoutes, scheduleRequestRoutes } from './routes/scheduleRequests.ts';
 import { setupRoutes } from './routes/setup.ts';
 
 export function createApp(db: Db) {
@@ -28,9 +29,10 @@ export function createApp(db: Db) {
 
   // Rutas publicas (login y registro) y luego todo lo demas exige sesion
   app.use('/api', authRoutes(db));
+  app.use('/api', scheduleRequestPublicRoutes(db)); // RQ66: el profesor responde desde el enlace del correo
   const api = express.Router();
   api.use(authenticate(db));
-  api.use(setupRoutes(db), bookingRoutes(db), reservationRoutes(db), commerceRoutes(db), attendanceRoutes(db), reportRoutes(db), platformRoutes(db), notificationRoutes(db));
+  api.use(setupRoutes(db), bookingRoutes(db), reservationRoutes(db), commerceRoutes(db), attendanceRoutes(db), reportRoutes(db), platformRoutes(db), notificationRoutes(db), scheduleRequestRoutes(db));
   app.use('/api', api);
   app.use('/api', (_req, _res) => {
     throw new HttpError(404, 'Ruta no encontrada', 'NOT_FOUND');

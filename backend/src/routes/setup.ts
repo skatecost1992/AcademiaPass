@@ -11,7 +11,8 @@ import { HttpError, requireAdmin, requirePerm } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { deleteAcademy, deleteSites, deleteSpaces } from '../lib/cleanup.ts';
 import { dayOccupancy, freeSlots } from '../lib/scheduling.ts';
-import { dateStr, id, idList, joinCode, optId, optText, own, ownAll, parse, text, timeStr } from '../lib/util.ts';
+import { dateStr, id, idList, isoDateTime, joinCode, optId, optText, own, ownAll, parse, text, timeStr } from '../lib/util.ts';
+import { bookingBody, createBookingsDetailed } from './bookings.ts';
 
 /** Academias visibles para el usuario: todas las de su organizacion o, si es cliente, las suyas */
 export async function visibleAcademyIds(db: Db, req: Request): Promise<number[]> {
@@ -42,7 +43,7 @@ const spaceBody = z.object({
 
 // Una foto ya comprimida en el telefono (~1600 px, JPEG 0.8) pesa 200-600 KB; el limite deja margen
 const MAX_PHOTO_BYTES = 2_500_000;
-const MAX_PHOTOS_PER_OWNER = 10;
+const MAX_PHOTOS_PER_OWNER = 30; // RQ68: se cargan hasta 15 a la vez desde la galeria
 
 export function setupRoutes(db: Db) {
   const r = Router();
@@ -337,14 +338,38 @@ export function setupRoutes(db: Db) {
     if (b.defaultCapacity > limit) throw new HttpError(400, `El cupo de la clase supera el aforo permitido en ${sp.name} (${limit})`, 'CAPACITY_EXCEEDED');
   };
 
+  /**
+   * RQ65: al crear la clase se puede programar su horario (fecha, hora desde y hasta) y, como opcion, repetirlo
+   * cada semana en uno o varios dias. Las sesiones usan el espacio, el profesor y el cupo de la clase; si alguna
+   * no cabe (espacio ocupado, fuera de horario, aforo, profesor ocupado) no se crea ni la clase ni ninguna sesion.
+   */
+  const scheduleBody = z.object({
+    startsAt: isoDateTime,
+    endsAt: isoDateTime,
+    repeatWeeks: z.coerce.number().int().min(1).max(26).default(1),
+    weekdays: z.array(z.coerce.number().int().min(0).max(6)).max(7).optional(),
+    // RQ66: crea la clase con las sesiones que caben y devuelve las que chocan, para pedir el cambio de horario
+    skipConflicts: z.boolean().default(false),
+  });
+
   r.post('/classes', classesPerm, async (req, res) => {
-    const b = parse(classBody, req.body);
+    const b = parse(classBody.extend({ schedule: scheduleBody.optional().nullable() }), req.body);
     await checkClassRefs(req, b);
     const [c] = await db.query(
       `INSERT INTO classes (tenant_id, academy_id, teacher_id, space_id, name, description, default_capacity, active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
       [req.user.tenantId, b.academyId, b.teacherId, b.spaceId, b.name, b.description, b.defaultCapacity, b.active],
     );
-    res.status(201).json(c);
+    if (!b.schedule) return res.status(201).json({ ...c, sessions: [], conflicts: [] });
+    try {
+      const { skipConflicts, ...schedule } = b.schedule;
+      const { rows, conflicts } = await createBookingsDetailed(db, req, parse(bookingBody, {
+        ...schedule, kind: 'class', spaceId: b.spaceId, classId: c.id, teacherId: b.teacherId, groupSize: b.defaultCapacity,
+      }), { skipConflicts });
+      res.status(201).json({ ...c, sessions: rows, conflicts });
+    } catch (err) {
+      await db.query(`DELETE FROM classes WHERE id = $1`, [c.id]); // sin sesiones validas no queda la clase a medias
+      throw err;
+    }
   });
 
   r.put('/classes/:id', classesPerm, async (req, res) => {

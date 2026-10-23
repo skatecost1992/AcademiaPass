@@ -5,9 +5,17 @@
 1. **Registrar mi academia** (pantalla de ingreso): crea la organización, la primera academia y la primera sede.
 2. **Academias**: crea más academias. Cada una tiene un *código de inscripción* para que los clientes se
    registren solos.
-3. **Sedes y espacios**: por sede, el horario de atención por día, fotos (cámara o galería) y sus espacios.
+3. **Sedes y espacios**: por sede, el horario de atención por día, fotos (cámara, o hasta 15 a la vez desde la
+   galería; máximo 30 por sede o espacio) y sus espacios.
    En cada espacio: aforo máximo y si admite varios grupos a la vez (cuántos y de cuántas personas).
-4. **Clases y profesores**: profesores internos o externos y las clases con su profesor y cupo.
+4. **Clases y profesores**: profesores internos o externos y las clases con su profesor y cupo. Al crear una clase
+   se programa su horario: fecha, hora desde y hasta (toca uno de los *horarios disponibles* del espacio para
+   usarlo) y, si es **periódica**, los días de la semana y cuántas semanas se repite. El cupo no puede superar el
+   aforo del espacio; si alguna sesión choca no se guarda nada y la app muestra los horarios libres.
+   Si choca con la clase de **otro profesor**, la app ofrece crear la clase con las sesiones que caben y **pedirle
+   el cambio de horario** en una o varias fechas (propones a qué hora pasaría su sesión). El profesor recibe un
+   correo con un enlace para aceptar o rechazar; si no tiene correo, respondes por él en **Cambios de horario**.
+   Al aceptar, su sesión se mueve (a sus clientes con cupo les llega un correo) y se programa tu clase.
 5. **Agenda**: *Programar clase* (espacio, fecha, hora desde/hasta, repetir N semanas) o *Reservar espacio*
    (para un profesor externo/interno o un cliente). Si el espacio está ocupado o se pasa del aforo, la app lo
    indica.
@@ -55,7 +63,7 @@ El administrador fija el límite de cancelación en **Reglas de reserva** (inici
 quiere, una distinta por academia y por sede (la de la sede manda). Cada clase en *Mis reservas* muestra hasta
 cuándo se puede cancelar.
 
-**Correos (RQ63, RQ64):** en **Mi perfil > Notificaciones por correo** cada usuario elige si recibe el
+**Correos (RQ63, RQ64, RQ67):** salen desde el Gmail del administrador (ver `docs/CORREO_GMAIL.md`).  en **Mi perfil > Notificaciones por correo** cada usuario elige si recibe el
 recordatorio 1 día antes y 3 horas antes de sus reservas y clases, y el aviso de vencimiento de su plan (con las
 clases tomadas y las pendientes). Hay que tener el correo registrado en *Mis datos*.
 

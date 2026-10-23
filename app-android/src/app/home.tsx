@@ -23,6 +23,7 @@ const STAFF_TILES: Tile[] = [
   { label: 'Usuarios', icon: 'key', href: '/users', admin: true },
   { label: 'Organizaciones', icon: 'globe', href: '/organizations', superadmin: true }, // RQ58
   { label: 'Reglas de reserva', icon: 'options', href: '/settings', perms: ['booking_rules'] }, // RQ44
+  { label: 'Cambios de horario', icon: 'swap-horizontal', href: '/schedule-requests', perms: ['classes'] }, // RQ66
   { label: 'Correos automáticos', icon: 'mail', href: '/email-settings', perms: ['notifications'] }, // RQ63, RQ64
 ];
 

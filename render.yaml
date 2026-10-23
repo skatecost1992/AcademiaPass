@@ -26,7 +26,16 @@ services:
         generateValue: true
       - key: DATABASE_URL
         sync: false # se pide al crear el Blueprint: cadena de conexion de Neon
-      # Correos (RQ63, RQ64): Render bloquea SMTP en el plan free; se usa la API HTTPS de Resend o de Brevo
+      # RQ67: correos desde tu Gmail por la API de Gmail (HTTPS; Render free bloquea SMTP). Ver docs/CORREO_GMAIL.md
+      - key: GMAIL_USER
+        sync: false
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false
+      # Alternativa: servicio de correos por API HTTPS (Resend o Brevo)
       - key: RESEND_API_KEY
         sync: false # clave de Resend (re_...); vacia si usas Brevo
       - key: BREVO_API_KEY

@@ -9,6 +9,9 @@ import { Platform } from 'react-native';
 
 export const MAX_SIDE = 1600;
 export const QUALITY = 0.8;
+/** RQ68: fotos que se pueden elegir de una vez en la galeria, y maximo por sede o espacio (igual que la API) */
+export const MAX_PER_PICK = 15;
+export const MAX_PER_OWNER = 30;
 
 export interface PhotoPayload {
   mime: 'image/jpeg';
@@ -25,8 +28,21 @@ export async function pickPhoto(source: 'camera' | 'library'): Promise<PhotoPayl
   const opts: ImagePicker.ImagePickerOptions = { mediaTypes: ['images'], quality: 1, allowsEditing: false, exif: false };
   const result = source === 'camera' ? await ImagePicker.launchCameraAsync(opts) : await ImagePicker.launchImageLibraryAsync(opts);
   if (result.canceled || !result.assets?.[0]) return null;
-  const asset = result.assets[0];
+  return processAsset(result.assets[0]);
+}
 
+/** RQ68: elige varias fotos de la galeria a la vez (hasta `limit`, maximo 15) y las procesa */
+export async function pickPhotos(limit = MAX_PER_PICK): Promise<ImagePicker.ImagePickerAsset[]> {
+  const n = Math.max(1, Math.min(limit, MAX_PER_PICK));
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images'], quality: 1, allowsEditing: false, exif: false, allowsMultipleSelection: n > 1, selectionLimit: n, orderedSelection: true,
+  });
+  if (result.canceled || !result.assets?.length) return [];
+  return result.assets.slice(0, n);
+}
+
+/** Reduce y comprime una foto elegida o tomada */
+export async function processAsset(asset: ImagePicker.ImagePickerAsset): Promise<PhotoPayload> {
   // Solo se reduce si supera el maximo: nunca se agranda
   const ctx = ImageManipulator.manipulate(asset.uri);
   if (asset.width && asset.height && Math.max(asset.width, asset.height) > MAX_SIDE) {

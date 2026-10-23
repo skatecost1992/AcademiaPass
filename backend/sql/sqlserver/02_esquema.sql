@@ -361,8 +361,39 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'notifications_once')
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'notifications_tenant_idx')
   CREATE INDEX notifications_tenant_idx ON dbo.notifications (tenant_id, created_at);
 
+-- RQ66: solicitudes de cambio de horario entre profesores (los borrados en cascada se hacen en lib/cleanup.ts)
+IF OBJECT_ID(N'dbo.schedule_requests', N'U') IS NULL
+CREATE TABLE dbo.schedule_requests (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  tenant_id INT NOT NULL REFERENCES dbo.tenants(id),
+  class_id INT NOT NULL REFERENCES dbo.classes(id),
+  target_teacher_id INT NOT NULL REFERENCES dbo.teachers(id),
+  requested_by INT NULL REFERENCES dbo.users(id),
+  message NVARCHAR(1000) NULL,
+  status NVARCHAR(10) NOT NULL DEFAULT N'pending' CHECK (status IN (N'pending', N'accepted', N'rejected', N'cancelled')),
+  response_note NVARCHAR(1000) NULL,
+  token NVARCHAR(64) NOT NULL UNIQUE,
+  resolved_by INT NULL REFERENCES dbo.users(id),
+  resolved_via NVARCHAR(10) NULL,
+  resolved_at DATETIMEOFFSET NULL,
+  created_at DATETIMEOFFSET NOT NULL DEFAULT SYSDATETIMEOFFSET()
+);
+IF OBJECT_ID(N'dbo.schedule_request_items', N'U') IS NULL
+CREATE TABLE dbo.schedule_request_items (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  request_id INT NOT NULL REFERENCES dbo.schedule_requests(id) ON DELETE CASCADE,
+  booking_id INT NOT NULL REFERENCES dbo.bookings(id),
+  wanted_starts_at DATETIMEOFFSET NOT NULL,
+  wanted_ends_at DATETIMEOFFSET NOT NULL,
+  proposed_starts_at DATETIMEOFFSET NOT NULL,
+  proposed_ends_at DATETIMEOFFSET NOT NULL,
+  new_booking_id INT NULL REFERENCES dbo.bookings(id)
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'schedule_requests_tenant_idx')
+  CREATE INDEX schedule_requests_tenant_idx ON dbo.schedule_requests (tenant_id, status);
+
 DECLARE @tablas INT = (SELECT COUNT(*) FROM sys.tables WHERE name IN
   (N'tenants', N'persons', N'academies', N'sites', N'users', N'spaces', N'photos', N'teachers', N'classes', N'bookings',
    N'plans', N'plan_academies', N'plan_sites', N'client_academies', N'memberships', N'payments', N'attendances',
-   N'class_reservations', N'capacity_requests', N'teacher_sites', N'notifications'));
-PRINT N'Esquema de AcademiaPass listo (' + CAST(@tablas AS NVARCHAR(5)) + N' de 21 tablas).';
+   N'class_reservations', N'capacity_requests', N'teacher_sites', N'notifications', N'schedule_requests', N'schedule_request_items'));
+PRINT N'Esquema de AcademiaPass listo (' + CAST(@tablas AS NVARCHAR(5)) + N' de 23 tablas).';

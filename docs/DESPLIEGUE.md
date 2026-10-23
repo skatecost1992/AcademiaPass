@@ -62,3 +62,19 @@ Con Mac y cuenta Apple Developer: `cd app-ios && ./build-ipa.sh TU_TEAM_ID` deja
 
 Ver `backend/.env.example`: `DATABASE_URL`, `PGSSL`, `JWT_SECRET` (obligatoria en producción),
 `APP_TIMEZONE`, `ADMIN_SIGNUP_CODE`, `CORS_ORIGIN`, `PORT`.
+
+### Correos (RQ63, RQ64)
+
+Los recordatorios y avisos de vencimiento salen por SMTP. Se configuran solo como variables de entorno (en
+Render: *Environment*; en el PC local: variables de usuario de Windows), nunca en el código:
+
+| Variable | Ejemplo | Nota |
+|---|---|---|
+| `SMTP_HOST` | `smtp.gmail.com` | Sin esta variable los correos solo quedan registrados (estado "Sin SMTP") |
+| `SMTP_PORT` | `587` | 465 usa SSL directo |
+| `SMTP_SECURE` | `false` | Opcional; por defecto `true` solo con el puerto 465 |
+| `SMTP_USER` | `academia@tudominio.com` | Usuario de la cuenta de envío |
+| `SMTP_PASS` | (secreto) | Con Gmail, una *contraseña de aplicación* (requiere verificación en 2 pasos) |
+| `MAIL_FROM` | `AcademiaPass <academia@tudominio.com>` | Remitente; por defecto `SMTP_USER` |
+
+Después de configurarlas, en la app: **Correos automáticos > Enviarme un correo de prueba**.

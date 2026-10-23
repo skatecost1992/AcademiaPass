@@ -8,11 +8,19 @@ import { after, before, describe, it } from 'node:test';
 
 process.env.PGLITE_DIR = 'memory://';
 process.env.JWT_SECRET = 'test-secret';
+// Zona horaria de la prueba: se elige para que la hora local sea cerca del mediodia, asi los horarios de las sedes
+// (05:00-23:00) y las ventanas de "hoy" no dependen de la hora a la que se corran las pruebas
+const OFFSET_H = (() => { const o = 12 - new Date().getUTCHours(); return o > 14 ? o - 24 : o < -12 ? o + 24 : o; })();
+process.env.APP_TIMEZONE = `Etc/GMT${OFFSET_H <= 0 ? '+' : '-'}${Math.abs(OFFSET_H)}`; // Etc/GMT+5 = UTC-5
+const OFFSET_MS = OFFSET_H * 3600_000;
+const OFFSET_ISO = `${OFFSET_H < 0 ? '-' : '+'}${String(Math.abs(OFFSET_H)).padStart(2, '0')}:00`;
 const { createApp } = await import('../src/app.ts');
 const { openDb } = await import('../src/db.ts');
 const { ensureAdmin } = await import('../src/bootstrap.ts');
 const { describePg } = await import('../src/db.ts');
 const { settleMissedReservations } = await import('../src/lib/scheduling.ts');
+const { sendReminders, sendPlanNotices } = await import('../src/lib/notifications.ts');
+const { setMailSender } = await import('../src/lib/mailer.ts');
 
 let base = '';
 let close = () => {};
@@ -44,10 +52,10 @@ async function registerAdmin(body: Record<string, unknown>) {
   return ok('POST', '/auth/login', { username: body.username, password: body.password });
 }
 
-/** Fecha ISO de hoy a la hora local indicada (America/Bogota, UTC-5) */
+/** Fecha ISO de hoy a la hora local indicada (zona de la prueba) */
 const todayAt = (h: number, m = 0) => {
-  const local = new Date(Date.now() - 5 * 3600_000).toISOString().slice(0, 10);
-  return new Date(`${local}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00-05:00`).toISOString();
+  const local = new Date(Date.now() + OFFSET_MS).toISOString().slice(0, 10);
+  return new Date(`${local}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00${OFFSET_ISO}`).toISOString();
 };
 
 before(async () => {
@@ -417,7 +425,7 @@ describe('AcademiaPass API', () => {
 
   it('valida el ingreso solo el mismo dia desde 1 h antes, respeta el horario del espacio y reporta clases (RQ39, RQ40, RQ41)', async () => {
     const tomorrow = (h: number, m = 0) => new Date(new Date(todayAt(h, m)).getTime() + 24 * 3600_000);
-    const dayInBogota = new Date(tomorrow(12).getTime() - 5 * 3600_000).getUTCDay(); // dia de la semana en Bogota
+    const dayInBogota = new Date(tomorrow(12).getTime() + OFFSET_MS).getUTCDay(); // dia de la semana local
 
     // RQ40: horario propio del espacio, dentro del de la sede (05:00-23:00)
     const sala = await ok('POST', '/spaces', { siteId: s.siteA1.id, name: 'Sala mañanas', maxCapacity: 8 }, s.admin);
@@ -437,7 +445,7 @@ describe('AcademiaPass API', () => {
     assert.ok(early.body.error.includes('08:00'), 'informa desde que hora (1 h antes del inicio)');
 
     // RQ41: reservadas y tomadas; el cliente solo ve lo suyo, el personal con reportes ve a todos
-    const range = `from=${new Date(Date.now() - 5 * 3600_000 - 86400_000).toISOString().slice(0, 10)}&to=${new Date(tomorrow(12).getTime() - 5 * 3600_000).toISOString().slice(0, 10)}`;
+    const range = `from=${new Date(Date.now() + OFFSET_MS - 86400_000).toISOString().slice(0, 10)}&to=${new Date(tomorrow(12).getTime() + OFFSET_MS).toISOString().slice(0, 10)}`;
     const mine = await ok('GET', `/reports/classes?${range}&clientId=999`, undefined, s.client);
     assert.ok(mine.rows.length > 0 && mine.rows.every((r: any) => r.client_id === s.clientId), 'el cliente solo ve su informacion');
     assert.ok(mine.rows.some((r: any) => r.booking_id === morning.id && r.state === 'reserved'));
@@ -450,7 +458,7 @@ describe('AcademiaPass API', () => {
 
   it('franjas libres, reglas por permiso, aforo consistente, horizonte, Mis reservas, reportes e inasistencias (RQ42-RQ52)', async () => {
     const tomorrow = (h: number, m = 0) => new Date(new Date(todayAt(h, m)).getTime() + 24 * 3600_000);
-    const localDay = (d: Date) => new Date(d.getTime() - 5 * 3600_000).toISOString().slice(0, 10);
+    const localDay = (d: Date) => new Date(d.getTime() + OFFSET_MS).toISOString().slice(0, 10);
 
     // RQ42: espacio ocupado -> sugiere las franjas libres del dia
     await ok('POST', '/bookings', { spaceId: s.salon.id, kind: 'class', classId: s.salsa.id, startsAt: tomorrow(12).toISOString(), endsAt: tomorrow(13).toISOString() }, s.admin);
@@ -532,8 +540,7 @@ describe('AcademiaPass API', () => {
   });
 
   it('el cliente reserva un espacio y ve las reservas ajenas sin datos personales', async () => {
-    const start = new Date(Date.now() + 26 * 3600_000);
-    start.setUTCHours(15, 0, 0, 0); // 10:00 en Bogota
+    const start = new Date(new Date(todayAt(10)).getTime() + 48 * 3600_000); // pasado manana a las 10:00
     const body = { spaceId: s.yogaRoom.id, startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 3600_000).toISOString(), groupSize: 2 };
     // RQ31: sin un plan de reservas que incluya la sede no puede reservar
     assert.equal((await call('POST', '/me/bookings', body, s.client)).body.code, 'NO_PLAN');
@@ -541,6 +548,8 @@ describe('AcademiaPass API', () => {
     const mRes = await ok('POST', '/memberships', { clientId: s.clientId, planId: planRes.id }, s.admin);
     const b = await ok('POST', '/me/bookings', body, s.client);
     assert.equal(b.kind, 'rental');
+    s.rental = b;
+    s.rentalMembershipId = mRes.id;
     // RQ34: el pago necesita cliente y plan; la reserva solo se asocia si es del mismo cliente
     assert.equal((await call('POST', '/payments', { bookingId: b.id, amount: 30000, method: 'tarjeta' }, s.admin)).status, 400);
     const otherClient = (await ok('GET', '/clients?q=cupo.dos', undefined, s.admin))[0];
@@ -551,9 +560,60 @@ describe('AcademiaPass API', () => {
     const pays = await ok('GET', `/payments?clientId=${s.clientId}`, undefined, s.admin);
     assert.ok(pays.every((x: any) => x.client_id === s.clientId && x.membership_id), 'todo pago con cliente y plan');
     assert.ok(pays.some((x: any) => x.concept === 'Plan: Reservas Yoga · Reserva: Reserva de Carlos Cliente'));
-    const day = new Date(start.getTime() - 5 * 3600_000).toISOString().slice(0, 10);
+    const day = new Date(start.getTime() + OFFSET_MS).toISOString().slice(0, 10);
     const listAdmin = await ok('GET', `/bookings?from=${day}&to=${day}&spaceId=${s.yogaRoom.id}`, undefined, s.admin);
     assert.equal(listAdmin[0].client_name, 'Carlos Cliente');
     assert.equal(listAdmin[0].paid, 30000);
+  });
+  it('envia recordatorios un dia y tres horas antes y avisa el vencimiento del plan (RQ63, RQ64)', async () => {
+    const mails: { to: string; subject: string; text: string; html: string }[] = [];
+    setMailSender(async (m) => { mails.push(m); });
+    try {
+      // Parametros de la organizacion: solo con permiso; preferencias y correo de cada usuario
+      assert.equal((await call('PUT', '/notification-settings', { dayBefore: true, hoursBefore: true, plan: true, planNoticeDays: 5 }, s.client)).status, 403);
+      const org = await ok('PUT', '/notification-settings', { dayBefore: true, hoursBefore: true, plan: true, planNoticeDays: 5 }, s.admin);
+      assert.equal(org.planNoticeDays, 5);
+      assert.equal((await call('PUT', '/me/notifications', { dayBefore: true, hoursBefore: true, plan: true, email: 'no-es-correo' }, s.client)).status, 400);
+      const prefs = await ok('PUT', '/me/notifications', { dayBefore: true, hoursBefore: true, plan: true, email: 'carlos@example.com' }, s.client);
+      assert.equal(prefs.email, 'carlos@example.com');
+      assert.equal(prefs.organization.planNoticeDays, 5);
+
+      // RQ63: la reserva se hizo con anticipacion; se recuerda un dia antes y tres horas antes, una sola vez cada uno
+      const start = new Date(s.rental.starts_at).getTime();
+      await database.query(`UPDATE bookings SET created_at = $2 WHERE id = $1`, [s.rental.id, new Date(start - 72 * 3600_000)]);
+      assert.ok(await sendReminders(database, new Date(start - 23 * 3600_000)) >= 1);
+      const day = mails.find((m) => m.subject.startsWith('Recordatorio: Reserva de Carlos Cliente mañana'));
+      assert.ok(day && day.text.includes('Yoga') && day.text.includes('Sede'), 'recordatorio del dia anterior');
+      assert.equal(await sendReminders(database, new Date(start - 22 * 3600_000)), 0, 'no repite');
+      assert.ok(await sendReminders(database, new Date(start - 2 * 3600_000)) >= 1);
+      assert.ok(mails.some((m) => m.subject.includes('en 3 horas') && m.to === 'carlos@example.com'));
+      assert.equal(await sendReminders(database, new Date(start - 1 * 3600_000)), 0);
+
+      // RQ64: plan por vencer dentro de los dias definidos, con datos del plan, clases tomadas y pendientes
+      const mem = (await ok('GET', `/clients/${s.clientId}`, undefined, s.admin)).memberships.find((m: any) => m.id === s.rentalMembershipId);
+      const noon = (ymd: string, plusDays: number) => new Date(new Date(`${ymd}T12:00:00${OFFSET_ISO}`).getTime() + plusDays * 86400_000);
+      await sendPlanNotices(database, noon(mem.ends_on, -8));
+      assert.ok(!mails.some((m) => m.subject.includes('Reservas Yoga')), 'fuera de los 5 dias no avisa');
+      await sendPlanNotices(database, noon(mem.ends_on, -2));
+      const expiring = mails.find((m) => m.subject === 'Tu plan Reservas Yoga vence en 2 día(s)');
+      assert.ok(expiring, 'aviso de plan por vencer');
+      assert.ok(expiring.text.includes('Clases pendientes por tomar') && expiring.text.includes('CLASES TOMADAS') && expiring.text.includes('CLASES RESERVADAS PENDIENTES'));
+      // El cliente apaga el aviso: no le llega el de vencido; al encenderlo, si
+      await ok('PUT', '/me/notifications', { dayBefore: true, hoursBefore: true, plan: false }, s.client);
+      await sendPlanNotices(database, noon(mem.ends_on, 1));
+      assert.ok(!mails.some((m) => m.subject.startsWith('Tu plan Reservas Yoga venció')));
+      assert.equal((await ok('GET', '/me/notifications', undefined, s.client)).email, 'carlos@example.com', 'sin email en el cuerpo conserva el correo');
+      await ok('PUT', '/me/notifications', { dayBefore: true, hoursBefore: true, plan: true }, s.client);
+      await sendPlanNotices(database, noon(mem.ends_on, 1));
+      assert.ok(mails.some((m) => m.subject.startsWith('Tu plan Reservas Yoga venció')));
+
+      // Registro de envios para el administrador
+      const log = await ok('GET', '/notifications', undefined, s.admin);
+      assert.ok(log.some((n: any) => n.kind === 'day_before' && n.status === 'sent' && n.full_name === 'Carlos Cliente'));
+      assert.ok(log.some((n: any) => n.kind === 'plan_expired'));
+      assert.equal((await call('GET', '/notifications', undefined, s.client)).status, 403);
+    } finally {
+      setMailSender(null);
+    }
   });
 });

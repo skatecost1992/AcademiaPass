@@ -55,5 +55,13 @@ El administrador fija el límite de cancelación en **Reglas de reserva** (inici
 quiere, una distinta por academia y por sede (la de la sede manda). Cada clase en *Mis reservas* muestra hasta
 cuándo se puede cancelar.
 
+**Correos (RQ63, RQ64):** en **Mi perfil > Notificaciones por correo** cada usuario elige si recibe el
+recordatorio 1 día antes y 3 horas antes de sus reservas y clases, y el aviso de vencimiento de su plan (con las
+clases tomadas y las pendientes). Hay que tener el correo registrado en *Mis datos*.
+
+El administrador (o quien tenga el permiso *Configurar los correos*) define en **Correos automáticos** cuáles se
+envían en la organización y con cuántos días de anticipación se avisa el vencimiento; ahí también ve los últimos
+correos enviados y puede mandarse uno de prueba.
+
 **Pagos:** todo pago se registra a un **cliente** y a uno de **sus planes**. Si corresponde a una reserva de
 espacio, se puede asociar también a esa reserva (debe ser del mismo cliente).

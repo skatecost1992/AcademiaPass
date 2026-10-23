@@ -1,7 +1,7 @@
 export type Role = 'admin' | 'staff' | 'client';
 export type Permission =
   | 'attendance' | 'schedules' | 'classes' | 'bookings' | 'clients' | 'plans' | 'payments'
-  | 'reports' | 'capacity_reports' | 'override_capacity' | 'booking_rules';
+  | 'reports' | 'capacity_reports' | 'override_capacity' | 'booking_rules' | 'notifications';
 
 export interface Profile {
   id: number;
@@ -67,4 +67,24 @@ export interface UnifiedReport {
   monthly: { totals: PeriodRow[]; byAcademy: (PeriodRow & { academy_name: string })[] };
   days: string[];
   attendances: { id: number; scanned_at: string; day: string; academy_name: string; site_name: string; booking_title: string | null; plan_name: string | null }[];
+}
+
+/** Correos automaticos (RQ63, RQ64): parametros de la organizacion */
+export interface OrgNotificationSettings {
+  dayBefore: boolean;
+  hoursBefore: boolean;
+  plan: boolean;
+  planNoticeDays: number;
+  dayBeforeHours: number;
+  hoursBeforeHours: number;
+  mailConfigured: boolean;
+}
+
+/** Preferencias de correo del usuario */
+export interface MyNotifications {
+  email: string | null;
+  dayBefore: boolean;
+  hoursBefore: boolean;
+  plan: boolean;
+  organization: OrgNotificationSettings;
 }

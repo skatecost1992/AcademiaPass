@@ -22,6 +22,7 @@ export const PERMISSIONS = {
   capacity_reports: 'Ver reportes de aforo',
   override_capacity: 'Permitir ingresos por fuera del aforo',
   booking_rules: 'Configurar reglas de reserva y cancelación', // RQ44
+  notifications: 'Configurar los correos de recordatorio y vencimiento', // RQ63, RQ64
 } as const;
 export type Permission = keyof typeof PERMISSIONS;
 export const ALL_PERMISSIONS = Object.keys(PERMISSIONS) as Permission[];

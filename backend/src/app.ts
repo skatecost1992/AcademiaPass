@@ -8,6 +8,7 @@ import { attendanceRoutes } from './routes/attendance.ts';
 import { authRoutes } from './routes/auth.ts';
 import { bookingRoutes } from './routes/bookings.ts';
 import { commerceRoutes } from './routes/commerce.ts';
+import { notificationRoutes } from './routes/notifications.ts';
 import { platformRoutes } from './routes/platform.ts';
 import { reportRoutes } from './routes/reports.ts';
 import { reservationRoutes } from './routes/reservations.ts';
@@ -29,7 +30,7 @@ export function createApp(db: Db) {
   app.use('/api', authRoutes(db));
   const api = express.Router();
   api.use(authenticate(db));
-  api.use(setupRoutes(db), bookingRoutes(db), reservationRoutes(db), commerceRoutes(db), attendanceRoutes(db), reportRoutes(db), platformRoutes(db));
+  api.use(setupRoutes(db), bookingRoutes(db), reservationRoutes(db), commerceRoutes(db), attendanceRoutes(db), reportRoutes(db), platformRoutes(db), notificationRoutes(db));
   app.use('/api', api);
   app.use('/api', (_req, _res) => {
     throw new HttpError(404, 'Ruta no encontrada', 'NOT_FOUND');

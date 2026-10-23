@@ -1,10 +1,52 @@
 import { router } from 'expo-router';
-import React, { useState } from 'react';
-import { Badge, Button, Card, Field, Gap, InfoRow, Screen, Section, errorText, notify } from '../components/ui';
+import React, { useEffect, useState } from 'react';
+import { Badge, Button, Card, Field, Gap, InfoRow, Muted, Screen, Section, Toggle, colors, errorText, notify, useLoad } from '../components/ui';
 import { getApiUrl, post, put } from '../lib/api';
 import { fmtDate } from '../lib/format';
 import { useSession } from '../session';
-import type { Profile } from '../types';
+import type { MyNotifications, Profile } from '../types';
+
+/**
+ * Correos que recibe el usuario (RQ63, RQ64). Solo se envian los que la organizacion tiene activos y si el
+ * usuario registro su correo en "Mis datos".
+ */
+function MyNotificationsCard({ email }: { email: string | null }) {
+  const state = useLoad<MyNotifications>('/me/notifications');
+  const [f, setF] = useState({ dayBefore: true, hoursBefore: true, plan: true });
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (state.data) setF({ dayBefore: state.data.dayBefore, hoursBefore: state.data.hoursBefore, plan: state.data.plan });
+  }, [state.data]);
+  const org = state.data?.organization;
+  const off = (on: boolean | undefined) => (org && !on ? 'Tu organización no envía este correo.' : undefined);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await put('/me/notifications', f);
+      notify('Preferencias guardadas');
+    } catch (e) {
+      notify('No se pudo guardar', errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title="Notificaciones por correo">
+      <Card>
+        {!email ? <Muted style={{ color: colors.danger, marginBottom: 8 }}>Registra tu correo en "Mis datos" para recibir estos avisos.</Muted> : <Muted style={{ marginBottom: 8 }}>Se envían a {email}</Muted>}
+        <Toggle label={`Recordatorio ${org?.dayBeforeHours ?? 24} horas antes`} value={f.dayBefore} onChange={(v) => setF({ ...f, dayBefore: v })}
+          hint={off(org?.dayBefore) ?? 'Un día antes de cada reserva o clase reservada.'} />
+        <Toggle label={`Recordatorio ${org?.hoursBeforeHours ?? 3} horas antes`} value={f.hoursBefore} onChange={(v) => setF({ ...f, hoursBefore: v })}
+          hint={off(org?.hoursBefore)} />
+        <Toggle label="Vencimiento de mi plan" value={f.plan} onChange={(v) => setF({ ...f, plan: v })}
+          hint={off(org?.plan) ?? `Aviso ${org?.planNoticeDays ?? 3} día(s) antes y cuando vence, con las clases tomadas y pendientes.`} />
+        <Button label="Guardar preferencias" variant="secondary" onPress={save} loading={busy} disabled={!state.data} />
+      </Card>
+    </Section>
+  );
+}
 
 export default function ProfileScreen() {
   const { user, setUser, signOut, isClient } = useSession();
@@ -62,6 +104,7 @@ export default function ProfileScreen() {
           <Button label="Guardar" onPress={save} loading={busy === 'p'} />
         </Card>
       </Section>
+      <MyNotificationsCard email={user.email} />
       <Section title="Contraseña">
         <Card>
           <Field label="Contraseña actual" value={pw.current} onChangeText={(v) => setPw({ ...pw, current: v })} secureTextEntry autoCapitalize="none" />

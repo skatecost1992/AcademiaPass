@@ -27,3 +27,14 @@ services:
         sync: false # se pide al crear el Blueprint: cadena de conexion de Neon
       - key: ADMIN_SIGNUP_CODE
         sync: false # opcional: si lo defines, solo quien lo conozca puede registrar una organizacion
+      # Correos de recordatorio y vencimiento de plan (RQ63, RQ64); sin SMTP_HOST solo se registran
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false

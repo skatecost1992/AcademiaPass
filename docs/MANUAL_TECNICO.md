@@ -46,6 +46,8 @@ El QR de un cliente de otra organización se rechaza como "cliente no registrado
 - `client_academies`: academias a las que está asociado el cliente (RQ13).
 - `payments`: siempre ligados a un `membership_id` o a un `booking_id`, nunca a ambos (CHECK, RQ4, RQ6).
 - `attendances`: ingresos registrados con QR o manualmente, con `over_capacity` (RQ7, RQ20, RQ21).
+- `notifications`: correos automáticos enviados (RQ63, RQ64); índice único `(user_id, kind, ref_id)` para no
+  repetir un aviso. Parámetros en `tenants.notify_*`, `plan_notice_days` y preferencias en `users.notify_*`.
 
 ## 4. Reglas principales
 
@@ -89,6 +91,7 @@ versión. Un cliente creado por el personal la acepta en su primer ingreso (pant
 | Agenda | `GET /bookings`, `GET /bookings/:id`, `POST /bookings`, `POST /me/bookings`, `POST /bookings/:id/cancel` |
 | Comercial | `/plans`, `/clients`, `POST /memberships`, `POST /memberships/:id/cancel`, `GET/POST /payments`, `/users` |
 | Ingresos | `POST /attendance/scan`, `GET /attendance`, `DELETE /attendance/:id` |
+| Correos | `GET/PUT /notification-settings`, `GET/PUT /me/notifications`, `GET /notifications`, `POST /notifications/test`, `POST /notifications/run` |
 | Reportes | `GET /reports/me`, `/reports/clients/:id/unified`, `/reports/attendance`, `/reports/capacity`, `/reports/payments`, `/reports/summary` |
 
 Todos los reportes aceptan `from`, `to` (AAAA-MM-DD), `academyId`, `siteId` y `groupBy=week|month`.
@@ -155,6 +158,8 @@ Todos los reportes aceptan `from`, `to` (AAAA-MM-DD), `academyId`, `siteId` y `g
 | 60 Reservas del día sin datos del tomador | `GET /spaces/:id/availability` → `busy` (franja, "Reservado", cupos libres); el cliente no ve títulos ni nombres |
 | 61 Clase con espacio y profesor | `classes.space_id`; `classBody` exige `teacherId` y `spaceId` de una sede de la academia; sesiones solo en ese espacio (`CLASS_SPACE`) |
 | 62 Profesor por sede y sin cruces | `teacher_sites`; el profesor debe estar asignado a la sede (`TEACHER_SITE`) y no puede tener dos clases a la vez (`TEACHER_BUSY`) |
+| 63 Recordatorio 1 día y 3 horas antes | `lib/notifications.ts` `sendReminders` (cada 5 min desde `server.ts`): cupos en clases y reservas de espacio que empiezan en ≤ 24 h; solo si se reservó antes de ese momento; una vez por aviso (`notifications`) |
+| 64 Aviso de vencimiento del plan | `sendPlanNotices`: plan por vencer (`plan_notice_days` antes, 0–30) y plan vencido (si no se renovó), con datos del plan, clases tomadas (`attendances.membership_id`) y reservadas pendientes; parámetros de la organización (permiso `notifications`) y de cada usuario (Mi perfil) |
 | 38 No reservar en dos lugares a la vez | `assertNoOverlap`: cupos en clases y espacios del cliente que se crucen → `OVERLAP` |
 | 35 Cancelación por academia y sede | `academies.cancel_hours`, `sites.cancel_hours` (NULL = hereda); `siteCancelHours`: sede → academia → organización |
 
@@ -162,7 +167,9 @@ Todos los reportes aceptan `from`, `to` (AAAA-MM-DD), `academyId`, `siteId` y `g
 
 `backend/test/api.test.ts` (node:test + PGlite en memoria) cubre registro, consentimiento, horarios, espacios
 ocupados y multigrupo, fotos, planes por academia/sede, QR, descuento por academia, aforo con y sin permiso,
-reportes y aislamiento entre organizaciones. `npm test` en `backend/`. La CI (`.github/workflows/ci.yml`) las
+reportes, aislamiento entre organizaciones y correos automáticos (con un envío simulado). `npm test` en `backend/`.
+La prueba elige una zona horaria en la que la hora local es cerca del mediodía, así el resultado no depende de
+la hora a la que se ejecute. La CI (`.github/workflows/ci.yml`) las
 corre en cada push junto con la verificación de tipos de las apps.
 
 ## 8. Mantenimiento

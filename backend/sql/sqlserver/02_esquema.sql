@@ -328,8 +328,41 @@ IF COL_LENGTH(N'dbo.class_reservations', N'settled_at') IS NULL
 IF COL_LENGTH(N'dbo.class_reservations', N'penalty_membership_id') IS NULL
   ALTER TABLE dbo.class_reservations ADD penalty_membership_id INT NULL REFERENCES dbo.memberships(id);
 
+-- RQ63, RQ64: correos de recordatorio y de vencimiento del plan (organizacion y preferencias de cada usuario)
+IF COL_LENGTH(N'dbo.tenants', N'notify_day_before') IS NULL
+  ALTER TABLE dbo.tenants ADD notify_day_before BIT NOT NULL CONSTRAINT df_tenants_notify_day_before DEFAULT 1;
+IF COL_LENGTH(N'dbo.tenants', N'notify_hours_before') IS NULL
+  ALTER TABLE dbo.tenants ADD notify_hours_before BIT NOT NULL CONSTRAINT df_tenants_notify_hours_before DEFAULT 1;
+IF COL_LENGTH(N'dbo.tenants', N'notify_plan') IS NULL
+  ALTER TABLE dbo.tenants ADD notify_plan BIT NOT NULL CONSTRAINT df_tenants_notify_plan DEFAULT 1;
+IF COL_LENGTH(N'dbo.users', N'notify_day_before') IS NULL
+  ALTER TABLE dbo.users ADD notify_day_before BIT NOT NULL CONSTRAINT df_users_notify_day_before DEFAULT 1;
+IF COL_LENGTH(N'dbo.users', N'notify_hours_before') IS NULL
+  ALTER TABLE dbo.users ADD notify_hours_before BIT NOT NULL CONSTRAINT df_users_notify_hours_before DEFAULT 1;
+IF COL_LENGTH(N'dbo.users', N'notify_plan') IS NULL
+  ALTER TABLE dbo.users ADD notify_plan BIT NOT NULL CONSTRAINT df_users_notify_plan DEFAULT 1;
+IF COL_LENGTH(N'dbo.tenants', N'plan_notice_days') IS NULL
+  ALTER TABLE dbo.tenants ADD plan_notice_days INT NOT NULL CONSTRAINT df_tenants_plan_notice DEFAULT 3;
+IF OBJECT_ID(N'dbo.notifications', N'U') IS NULL
+CREATE TABLE dbo.notifications (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  tenant_id INT NOT NULL REFERENCES dbo.tenants(id),
+  user_id INT NOT NULL REFERENCES dbo.users(id),
+  kind NVARCHAR(20) NOT NULL CHECK (kind IN (N'day_before', N'hours_before', N'plan_expiring', N'plan_expired')),
+  ref_id INT NOT NULL,
+  email NVARCHAR(200) NOT NULL,
+  subject NVARCHAR(300) NOT NULL,
+  status NVARCHAR(10) NOT NULL DEFAULT N'pending' CHECK (status IN (N'pending', N'sent', N'logged', N'failed')),
+  error NVARCHAR(1000) NULL,
+  created_at DATETIMEOFFSET NOT NULL DEFAULT SYSDATETIMEOFFSET()
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'notifications_once')
+  CREATE UNIQUE INDEX notifications_once ON dbo.notifications (user_id, kind, ref_id);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'notifications_tenant_idx')
+  CREATE INDEX notifications_tenant_idx ON dbo.notifications (tenant_id, created_at);
+
 DECLARE @tablas INT = (SELECT COUNT(*) FROM sys.tables WHERE name IN
   (N'tenants', N'persons', N'academies', N'sites', N'users', N'spaces', N'photos', N'teachers', N'classes', N'bookings',
    N'plans', N'plan_academies', N'plan_sites', N'client_academies', N'memberships', N'payments', N'attendances',
-   N'class_reservations', N'capacity_requests'));
-PRINT N'Esquema de AcademiaPass listo (' + CAST(@tablas AS NVARCHAR(5)) + N' de 19 tablas).';
+   N'class_reservations', N'capacity_requests', N'teacher_sites', N'notifications'));
+PRINT N'Esquema de AcademiaPass listo (' + CAST(@tablas AS NVARCHAR(5)) + N' de 21 tablas).';

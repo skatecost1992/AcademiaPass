@@ -289,4 +289,29 @@ CREATE TABLE IF NOT EXISTS teacher_sites (
   PRIMARY KEY (teacher_id, site_id)
 );
 ALTER TABLE class_reservations ADD COLUMN IF NOT EXISTS penalty_membership_id int REFERENCES memberships(id) ON DELETE SET NULL;
+
+-- RQ63, RQ64: correos de recordatorio y de vencimiento del plan. La organizacion decide cuales se envian y cada
+-- usuario (cliente o personal) puede apagar los suyos
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notify_day_before boolean NOT NULL DEFAULT true;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notify_hours_before boolean NOT NULL DEFAULT true;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notify_plan boolean NOT NULL DEFAULT true;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS plan_notice_days int NOT NULL DEFAULT 3;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_day_before boolean NOT NULL DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_hours_before boolean NOT NULL DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_plan boolean NOT NULL DEFAULT true;
+-- Correos enviados: el indice unico evita mandar dos veces el mismo aviso (ref_id = reserva o plan adquirido)
+CREATE TABLE IF NOT EXISTS notifications (
+  id serial PRIMARY KEY,
+  tenant_id int NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  user_id int NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (kind IN ('day_before', 'hours_before', 'plan_expiring', 'plan_expired')),
+  ref_id int NOT NULL,
+  email text NOT NULL,
+  subject text NOT NULL,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'logged', 'failed')),
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS notifications_once ON notifications (user_id, kind, ref_id);
+CREATE INDEX IF NOT EXISTS notifications_tenant_idx ON notifications (tenant_id, created_at);
 `;

@@ -6,6 +6,7 @@
 #        ACADEMIAPASS_APP_PASSWORD   clave del login academiapass_app (obligatoria)
 #        ACADEMIAPASS_SQL_SERVER     opcional (por defecto este equipo)
 #        ACADEMIAPASS_DB_NAME        opcional (por defecto AcademiaPass)
+#        SMTP_HOST, SMTP_USER, SMTP_PASS, MAIL_FROM  opcionales: envio de correos (ver docs\DESPLIEGUE.md)
 #   2. Base creada con sql\sqlserver\crear-base-sqlserver.ps1
 #
 # Uso:  powershell -ExecutionPolicy Bypass -File iniciar-local-sqlserver.ps1 [-Seed]
@@ -15,7 +16,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
-foreach ($name in 'ACADEMIAPASS_APP_PASSWORD', 'ACADEMIAPASS_SQL_SERVER', 'ACADEMIAPASS_DB_NAME', 'ACADEMIAPASS_APP_USER', 'JWT_SECRET') {
+foreach ($name in 'ACADEMIAPASS_APP_PASSWORD', 'ACADEMIAPASS_SQL_SERVER', 'ACADEMIAPASS_DB_NAME', 'ACADEMIAPASS_APP_USER', 'JWT_SECRET',
+                 'SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASS', 'MAIL_FROM') {
     if (-not [Environment]::GetEnvironmentVariable($name, 'Process')) {
         $v = [Environment]::GetEnvironmentVariable($name, 'User')
         if (-not $v) { $v = [Environment]::GetEnvironmentVariable($name, 'Machine') }

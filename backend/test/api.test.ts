@@ -140,9 +140,16 @@ describe('AcademiaPass API', () => {
   });
 
   it('valida horario de atencion y espacios ocupados (RQ18, RQ19)', async () => {
-    s.teacherIn = await ok('POST', '/teachers', { fullName: 'Pedro Interno', kind: 'internal' }, s.admin);
-    s.teacherExt = await ok('POST', '/teachers', { fullName: 'Laura Externa', kind: 'external' }, s.admin);
-    s.salsa = await ok('POST', '/classes', { academyId: s.academyA.id, teacherId: s.teacherIn.id, name: 'Salsa', defaultCapacity: 2 }, s.admin);
+    // RQ62: profesor sin sede no se crea
+    assert.equal((await call('POST', '/teachers', { fullName: 'Sin sede', kind: 'internal', siteIds: [] }, s.admin)).status, 400);
+    s.teacherIn = await ok('POST', '/teachers', { fullName: 'Pedro Interno', kind: 'internal', siteIds: [s.siteA1.id] }, s.admin);
+    s.teacherExt = await ok('POST', '/teachers', { fullName: 'Laura Externa', kind: 'external', siteIds: [s.siteA1.id] }, s.admin);
+    assert.equal(s.teacherIn.sites[0].name, 'Norte');
+    // RQ61: la clase exige profesor y espacio de una sede de su academia, con el profesor asignado a esa sede
+    assert.equal((await call('POST', '/classes', { academyId: s.academyA.id, name: 'Sin profe', defaultCapacity: 2, spaceId: s.salon.id }, s.admin)).status, 400);
+    assert.equal((await call('POST', '/classes', { academyId: s.academyA.id, teacherId: s.teacherIn.id, name: 'Otra academia', defaultCapacity: 2, spaceId: s.yogaRoom.id }, s.admin)).body.code, 'SPACE_ACADEMY');
+    assert.equal((await call('POST', '/classes', { academyId: s.academyA.id, teacherId: s.teacherIn.id, name: 'Muy grande', defaultCapacity: 50, spaceId: s.salon.id }, s.admin)).body.code, 'CAPACITY_EXCEEDED');
+    s.salsa = await ok('POST', '/classes', { academyId: s.academyA.id, teacherId: s.teacherIn.id, spaceId: s.salon.id, name: 'Salsa', defaultCapacity: 2 }, s.admin);
 
     const out = await call('POST', '/bookings', { spaceId: s.salon.id, kind: 'class', classId: s.salsa.id, startsAt: todayAt(23, 0), endsAt: todayAt(23, 59) }, s.admin);
     assert.equal(out.body.code, 'OUT_OF_HOURS');
@@ -302,13 +309,15 @@ describe('AcademiaPass API', () => {
     // RQ36: sin horario de atencion no se agenda; con horario si
     const site = await ok('POST', '/sites', { academyId: tmp.id, name: 'Sede temporal' }, s.admin);
     const tmpSpace = await ok('POST', '/spaces', { siteId: site.id, name: 'Sin horario', maxCapacity: 5 }, s.admin);
-    const tmpClass = await ok('POST', '/classes', { academyId: tmp.id, name: 'Sin horario', defaultCapacity: 3 }, s.admin);
+    const tmpTeacher = await ok('POST', '/teachers', { fullName: 'Profe temporal', kind: 'internal', siteIds: [site.id] }, s.admin);
+    const tmpClass = await ok('POST', '/classes', { academyId: tmp.id, teacherId: tmpTeacher.id, spaceId: tmpSpace.id, name: 'Sin horario', defaultCapacity: 3 }, s.admin);
     assert.equal((await call('POST', '/bookings', { spaceId: tmpSpace.id, kind: 'class', classId: tmpClass.id, startsAt: todayAt(12), endsAt: todayAt(13) }, s.admin)).body.code, 'NO_OPENING_HOURS');
     await ok('PUT', `/sites/${site.id}`, { academyId: tmp.id, name: 'Sede temporal', openingHours: [0, 1, 2, 3, 4, 5, 6].map((day) => ({ day, open: '05:00', close: '23:00' })) }, s.admin);
     const space = await ok('POST', '/spaces', { siteId: site.id, name: 'Sala', maxCapacity: 5 }, s.admin);
     const pixel = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     await ok('POST', '/photos', { ownerType: 'site', ownerId: site.id, mime: 'image/png', data: pixel }, s.admin);
-    const cls = await ok('POST', '/classes', { academyId: tmp.id, name: 'Clase temporal', defaultCapacity: 3 }, s.admin);
+    const cls = await ok('POST', '/classes', { academyId: tmp.id, teacherId: tmpTeacher.id, spaceId: space.id, name: 'Clase temporal', defaultCapacity: 3 }, s.admin);
+    await ok('PUT', `/teachers/${tmpTeacher.id}`, { fullName: 'Profe temporal', kind: 'internal', siteIds: [site.id] }, s.admin);
     await ok('POST', '/bookings', { spaceId: space.id, kind: 'class', classId: cls.id, startsAt: todayAt(12), endsAt: todayAt(13) }, s.admin);
     assert.equal((await call('DELETE', `/academies/${tmp.id}`, undefined, s.admin)).status, 204);
     const academies = await ok('GET', '/academies', undefined, s.admin);
@@ -370,7 +379,13 @@ describe('AcademiaPass API', () => {
     // RQ38: dos clases que se cruzan en el tiempo, en espacios distintos
     const [c1] = await ok('POST', '/bookings', { spaceId: s.salon.id, kind: 'class', classId: s.salsa.id, startsAt: tomorrow(16), endsAt: tomorrow(17) }, s.admin);
     const otherSpace = await ok('POST', '/spaces', { siteId: s.siteA1.id, name: 'Salón 2', maxCapacity: 10 }, s.admin);
-    const [c2] = await ok('POST', '/bookings', { spaceId: otherSpace.id, kind: 'class', classId: s.salsa.id, startsAt: tomorrow(16, 30), endsAt: tomorrow(17, 30) }, s.admin);
+    const otro = await ok('POST', '/teachers', { fullName: 'Marta Otra', kind: 'internal', siteIds: [s.siteA1.id] }, s.admin);
+    const bachata = await ok('POST', '/classes', { academyId: s.academyA.id, teacherId: otro.id, spaceId: otherSpace.id, name: 'Bachata', defaultCapacity: 5 }, s.admin);
+    // RQ61: una clase solo se programa en su espacio; RQ62: el profesor no puede estar en dos clases a la vez
+    assert.equal((await call('POST', '/bookings', { spaceId: otherSpace.id, kind: 'class', classId: s.salsa.id, startsAt: tomorrow(16, 30), endsAt: tomorrow(17, 30) }, s.admin)).body.code, 'CLASS_SPACE');
+    const busyTeacher = await call('POST', '/bookings', { spaceId: otherSpace.id, kind: 'class', classId: bachata.id, teacherId: s.teacherIn.id, startsAt: tomorrow(16, 30), endsAt: tomorrow(17, 30) }, s.admin);
+    assert.equal(busyTeacher.body.code, 'TEACHER_BUSY');
+    const [c2] = await ok('POST', '/bookings', { spaceId: otherSpace.id, kind: 'class', classId: bachata.id, startsAt: tomorrow(16, 30), endsAt: tomorrow(17, 30) }, s.admin);
     await ok('POST', '/me/class-reservations', { bookingId: c1.id }, s.client);
     const clash = await call('POST', '/me/class-reservations', { bookingId: c2.id }, s.client);
     assert.equal(clash.body.code, 'OVERLAP');
@@ -409,10 +424,11 @@ describe('AcademiaPass API', () => {
     const bad = await call('PUT', `/spaces/${sala.id}`, { siteId: s.siteA1.id, name: 'Sala mañanas', maxCapacity: 8, openingHours: [{ day: dayInBogota, open: '04:00', close: '12:00' }] }, s.admin);
     assert.equal(bad.body.code, 'SPACE_HOURS');
     await ok('PUT', `/spaces/${sala.id}`, { siteId: s.siteA1.id, name: 'Sala mañanas', maxCapacity: 8, openingHours: [{ day: dayInBogota, open: '08:00', close: '12:00' }] }, s.admin);
-    const late = await call('POST', '/bookings', { spaceId: sala.id, kind: 'class', classId: s.salsa.id, startsAt: tomorrow(18).toISOString(), endsAt: tomorrow(19).toISOString() }, s.admin);
+    const yogaM = await ok('POST', '/classes', { academyId: s.academyA.id, teacherId: s.teacherExt.id, spaceId: sala.id, name: 'Yoga mañanas', defaultCapacity: 8 }, s.admin);
+    const late = await call('POST', '/bookings', { spaceId: sala.id, kind: 'class', classId: yogaM.id, startsAt: tomorrow(18).toISOString(), endsAt: tomorrow(19).toISOString() }, s.admin);
     assert.equal(late.body.code, 'OUT_OF_HOURS');
     assert.ok(late.body.error.includes('el espacio'));
-    const [morning] = await ok('POST', '/bookings', { spaceId: sala.id, kind: 'class', classId: s.salsa.id, startsAt: tomorrow(9).toISOString(), endsAt: tomorrow(10).toISOString() }, s.admin);
+    const [morning] = await ok('POST', '/bookings', { spaceId: sala.id, kind: 'class', classId: yogaM.id, startsAt: tomorrow(9).toISOString(), endsAt: tomorrow(10).toISOString() }, s.admin);
 
     // RQ39: una clase de manana no se valida hoy
     await ok('POST', '/me/class-reservations', { bookingId: morning.id }, s.client);
@@ -442,8 +458,11 @@ describe('AcademiaPass API', () => {
     assert.equal(taken.body.code, 'SPACE_TAKEN');
     assert.ok(taken.body.error.includes('Horarios disponibles ese día'));
     assert.ok(taken.body.available.some((x: string) => x.endsWith('-12:00')) && taken.body.available.some((x: string) => x.startsWith('13:00')));
-    const av = await ok('GET', `/spaces/${s.salon.id}/availability?date=${localDay(tomorrow(12))}`, undefined, s.admin);
+    const av = await ok('GET', `/spaces/${s.salon.id}/availability?date=${localDay(tomorrow(12))}`, undefined, s.client);
     assert.deepEqual(av.available, taken.body.available);
+    // RQ60: el cliente ve las franjas reservadas y los cupos libres, sin titulos ni nombres
+    assert.ok(av.busy.some((b: any) => b.from === '12:00' && b.label === 'Reservado' && b.spotsLeft === 0));
+    assert.ok(!JSON.stringify(av).includes('Salsa') && !JSON.stringify(av).includes('Carlos'));
 
     // RQ44: las reglas las configura quien tenga el permiso, no solo el admin
     await ok('POST', '/users', { username: 'reglas', password: 'Clave.12345', fullName: 'Reglas', document: '8008', permissions: ['booking_rules'] }, s.admin);

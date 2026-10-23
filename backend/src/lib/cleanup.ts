@@ -17,6 +17,7 @@ export async function deleteSpaces(q: Db, tenantId: number, spaceIds: number[]) 
   await q.query(`DELETE FROM capacity_requests WHERE booking_id IN (SELECT id FROM bookings WHERE space_id IN ${list})`);
   await q.query(`UPDATE attendances SET space_id = NULL WHERE space_id IN ${list}`);
   await q.query(`DELETE FROM bookings WHERE space_id IN ${list}`);
+  await q.query(`UPDATE classes SET space_id = NULL WHERE space_id IN ${list}`);
   await q.query(`DELETE FROM photos WHERE tenant_id = $1 AND owner_type = 'space' AND owner_id IN ${list}`, [tenantId]);
   await q.query(`DELETE FROM spaces WHERE id IN ${list}`);
 }
@@ -28,6 +29,7 @@ export async function deleteSites(q: Db, tenantId: number, siteIds: number[]) {
   await deleteSpaces(q, tenantId, spaces.map((s) => s.id));
   await q.query(`DELETE FROM photos WHERE tenant_id = $1 AND owner_type = 'site' AND owner_id IN ${list}`, [tenantId]);
   await q.query(`DELETE FROM plan_sites WHERE site_id IN ${list}`);
+  await q.query(`DELETE FROM teacher_sites WHERE site_id IN ${list}`);
   await q.query(`DELETE FROM capacity_requests WHERE site_id IN ${list}`);
   await q.query(`UPDATE users SET home_site_id = NULL WHERE home_site_id IN ${list}`);
   await q.query(`DELETE FROM sites WHERE id IN ${list}`);

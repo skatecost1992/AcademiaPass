@@ -312,6 +312,17 @@ IF COL_LENGTH(N'dbo.tenants', N'reviewed_at') IS NULL
 IF COL_LENGTH(N'dbo.users', N'is_superadmin') IS NULL
   ALTER TABLE dbo.users ADD is_superadmin BIT NOT NULL CONSTRAINT df_users_superadmin DEFAULT 0;
 
+-- RQ61: la clase se da en un espacio de una sede de su academia
+IF COL_LENGTH(N'dbo.classes', N'space_id') IS NULL
+  ALTER TABLE dbo.classes ADD space_id INT NULL REFERENCES dbo.spaces(id);
+-- RQ62: sedes en las que puede dar clase cada profesor
+IF OBJECT_ID(N'dbo.teacher_sites', N'U') IS NULL
+CREATE TABLE dbo.teacher_sites (
+  teacher_id INT NOT NULL REFERENCES dbo.teachers(id) ON DELETE CASCADE,
+  site_id INT NOT NULL REFERENCES dbo.sites(id),
+  PRIMARY KEY (teacher_id, site_id)
+);
+
 IF COL_LENGTH(N'dbo.class_reservations', N'settled_at') IS NULL
   ALTER TABLE dbo.class_reservations ADD settled_at DATETIMEOFFSET NULL;
 IF COL_LENGTH(N'dbo.class_reservations', N'penalty_membership_id') IS NULL

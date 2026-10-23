@@ -151,6 +151,10 @@ Todos los reportes aceptan `from`, `to` (AAAA-MM-DD), `academyId`, `siteId` y `g
 | 55 Vigencia en días (≤365) o meses (≤12) desde la fecha de ingreso | `plans.validity_months`; `ends_on` = ingreso + meses − 1 día o + días − 1 |
 | 56 Fecha límite de venta del plan | `plans.sale_until`; `POST /memberships` → `PLAN_SALE_CLOSED`; los ya asignados siguen hasta su vencimiento |
 | 58 Activación de nuevas organizaciones | `tenants.status` (pending/active/rejected), `users.is_superadmin` (usuario base `admin`), `/platform/tenants`, pantalla *Organizaciones*; `TENANT_APPROVAL=off` lo desactiva |
+| 59 Cambiar de servidor sin abrir sesión | Pantalla *Servidor*: el admin solo autoriza; `setServer` + `signOut` |
+| 60 Reservas del día sin datos del tomador | `GET /spaces/:id/availability` → `busy` (franja, "Reservado", cupos libres); el cliente no ve títulos ni nombres |
+| 61 Clase con espacio y profesor | `classes.space_id`; `classBody` exige `teacherId` y `spaceId` de una sede de la academia; sesiones solo en ese espacio (`CLASS_SPACE`) |
+| 62 Profesor por sede y sin cruces | `teacher_sites`; el profesor debe estar asignado a la sede (`TEACHER_SITE`) y no puede tener dos clases a la vez (`TEACHER_BUSY`) |
 | 38 No reservar en dos lugares a la vez | `assertNoOverlap`: cupos en clases y espacios del cliente que se crucen → `OVERLAP` |
 | 35 Cancelación por academia y sede | `academies.cancel_hours`, `sites.cancel_hours` (NULL = hereda); `siteCancelHours`: sede → academia → organización |
 

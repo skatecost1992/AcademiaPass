@@ -279,5 +279,14 @@ ALTER TABLE plans ADD COLUMN IF NOT EXISTS sale_until date;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superadmin boolean NOT NULL DEFAULT false;
+
+-- RQ61: la clase se da en un espacio de una sede de su academia
+ALTER TABLE classes ADD COLUMN IF NOT EXISTS space_id int REFERENCES spaces(id) ON DELETE SET NULL;
+-- RQ62: sedes en las que puede dar clase cada profesor
+CREATE TABLE IF NOT EXISTS teacher_sites (
+  teacher_id int NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+  site_id int NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  PRIMARY KEY (teacher_id, site_id)
+);
 ALTER TABLE class_reservations ADD COLUMN IF NOT EXISTS penalty_membership_id int REFERENCES memberships(id) ON DELETE SET NULL;
 `;

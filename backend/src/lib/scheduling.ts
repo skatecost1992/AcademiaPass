@@ -61,6 +61,34 @@ export async function freeSlots(db: Db, spaceId: number, date: string, minMinute
   return free;
 }
 
+/**
+ * RQ60: ocupacion del espacio en un dia, sin datos de quien reservo: cada franja reservada con los cupos que
+ * quedan libres en ella (aforo menos las personas de todas las reservas que se cruzan).
+ */
+export async function dayOccupancy(db: Db, spaceId: number, date: string) {
+  const [sp] = await db.query(`SELECT max_capacity, allow_multi_group, max_groups FROM spaces WHERE id = $1`, [spaceId]);
+  const [start, end] = dayBounds(date, date);
+  const rows = await db.query(
+    `SELECT starts_at, ends_at, group_size FROM bookings WHERE space_id = $1 AND status = 'confirmed' AND starts_at < $3 AND ends_at > $2 ORDER BY starts_at`,
+    [spaceId, start, end],
+  );
+  const capacity = sp?.max_capacity ?? 0;
+  const busy = rows.map((r) => {
+    const s = new Date(r.starts_at).getTime();
+    const e = new Date(r.ends_at).getTime();
+    const overlapping = rows.filter((o) => new Date(o.starts_at).getTime() < e && new Date(o.ends_at).getTime() > s);
+    const people = overlapping.reduce((sum, o) => sum + o.group_size, 0);
+    const groupsFull = !sp?.allow_multi_group || overlapping.length >= sp.max_groups;
+    return {
+      from: localParts(new Date(r.starts_at)).time,
+      to: localParts(new Date(r.ends_at)).time,
+      label: 'Reservado',
+      spotsLeft: groupsFull ? 0 : Math.max(0, capacity - people),
+    };
+  });
+  return { capacity, busy };
+}
+
 /** RQ47: no se reserva ni se agenda mas alla del limite de meses definido por la academia */
 export async function assertWithinHorizon(db: Db, tenantId: number, startsAt: Date) {
   const [t] = await db.query(`SELECT booking_horizon_months FROM tenants WHERE id = $1`, [tenantId]);

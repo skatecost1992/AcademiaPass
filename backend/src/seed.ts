@@ -58,13 +58,13 @@ try {
   const salonSur = await call('POST', '/spaces', { siteId: sur.id, name: 'Salón Sur', maxCapacity: 15 });
   const salaYoga = await call('POST', '/spaces', { siteId: centro.id, name: 'Sala Zen', maxCapacity: 12 });
 
-  const pedro = await call('POST', '/teachers', { fullName: 'Pedro Gómez', kind: 'internal', specialty: 'Salsa y bachata' });
-  const laura = await call('POST', '/teachers', { fullName: 'Laura Ríos', kind: 'external', specialty: 'Pilates' });
-  const ana = await call('POST', '/teachers', { fullName: 'Ana Torres', kind: 'internal', specialty: 'Yoga' });
+  const pedro = await call('POST', '/teachers', { fullName: 'Pedro Gómez', kind: 'internal', specialty: 'Salsa y bachata', siteIds: [norte.id, sur.id] });
+  const laura = await call('POST', '/teachers', { fullName: 'Laura Ríos', kind: 'external', specialty: 'Pilates', siteIds: [norte.id] });
+  const ana = await call('POST', '/teachers', { fullName: 'Ana Torres', kind: 'internal', specialty: 'Yoga', siteIds: [centro.id] });
 
-  const salsa = await call('POST', '/classes', { academyId: danza.id, teacherId: pedro.id, name: 'Salsa principiantes', defaultCapacity: 15 });
-  const urbano = await call('POST', '/classes', { academyId: danza.id, teacherId: pedro.id, name: 'Danza urbana', defaultCapacity: 12 });
-  const hatha = await call('POST', '/classes', { academyId: yoga.id, teacherId: ana.id, name: 'Hatha yoga', defaultCapacity: 10 });
+  const salsa = await call('POST', '/classes', { academyId: danza.id, teacherId: pedro.id, spaceId: salon1.id, name: 'Salsa principiantes', defaultCapacity: 15 });
+  const urbano = await call('POST', '/classes', { academyId: danza.id, teacherId: pedro.id, spaceId: salonSur.id, name: 'Danza urbana', defaultCapacity: 12 });
+  const hatha = await call('POST', '/classes', { academyId: yoga.id, teacherId: ana.id, spaceId: salaYoga.id, name: 'Hatha yoga', defaultCapacity: 10 });
 
   const now = new Date();
   const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Bogota', hour: '2-digit', hourCycle: 'h23' }).format(now));
@@ -87,9 +87,15 @@ try {
   const { id: c2 } = await call('POST', '/clients', { username: 'cliente2.demo', password: PASS, fullName: 'Julián Mora', document: 'DEMO-11', academyIds: [danza.id], homeSiteId: norte.id });
   await call('POST', '/memberships', { clientId: c2, planId: planCombo.id, payment: { amount: 200000, method: 'transferencia', reference: 'TRX-1001' } });
 
-  await call('POST', '/attendance/scan', { clientId: c1.user.id, academyId: danza.id, siteId: norte.id, bookingId: salsaHoy.id });
-  await call('POST', '/attendance/scan', { clientId: c1.user.id, academyId: yoga.id, siteId: centro.id, bookingId: yogaHoy.id });
-  await call('POST', '/attendance/scan', { clientId: c2, academyId: danza.id, siteId: norte.id, bookingId: salsaHoy.id });
+  // Ingresos de ejemplo: solo se pueden validar el dia de la clase desde 1 h antes hasta el final (RQ39); fuera
+  // de esa ventana (seed corrido de noche) se omiten
+  try {
+    await call('POST', '/attendance/scan', { clientId: c1.user.id, academyId: danza.id, siteId: norte.id, bookingId: salsaHoy.id });
+    await call('POST', '/attendance/scan', { clientId: c1.user.id, academyId: yoga.id, siteId: centro.id, bookingId: yogaHoy.id });
+    await call('POST', '/attendance/scan', { clientId: c2, academyId: danza.id, siteId: norte.id, bookingId: salsaHoy.id });
+  } catch (e) {
+    console.log(`  (Ingresos de ejemplo omitidos: ${(e as Error).message})`);
+  }
 
   console.log('Organización demo creada.');
   console.log(`  admin.demo / ${PASS}   recepcion.demo / ${PASS}   cliente.demo / ${PASS}   cliente2.demo / ${PASS}`);

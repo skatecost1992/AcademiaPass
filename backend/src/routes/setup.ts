@@ -10,8 +10,8 @@ import { z } from 'zod';
 import { HttpError, requireAdmin, requirePerm } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { deleteAcademy, deleteSites, deleteSpaces } from '../lib/cleanup.ts';
-import { freeSlots } from '../lib/scheduling.ts';
-import { dateStr, id, idList, joinCode, optId, optText, own, parse, text, timeStr } from '../lib/util.ts';
+import { dayOccupancy, freeSlots } from '../lib/scheduling.ts';
+import { dateStr, id, idList, joinCode, optId, optText, own, ownAll, parse, text, timeStr } from '../lib/util.ts';
 
 /** Academias visibles para el usuario: todas las de su organizacion o, si es cliente, las suyas */
 export async function visibleAcademyIds(db: Db, req: Request): Promise<number[]> {
@@ -171,7 +171,7 @@ export function setupRoutes(db: Db) {
   r.get('/spaces/:id/availability', async (req, res) => {
     const sp = await own(db, 'spaces', parse(id, req.params.id), req.user.tenantId, 'Espacio');
     const date = parse(dateStr, req.query.date);
-    res.json({ date, available: await freeSlots(db, sp.id, date) });
+    res.json({ date, available: await freeSlots(db, sp.id, date), ...(await dayOccupancy(db, sp.id, date)) });
   });
 
   r.post('/spaces', settings, async (req, res) => {
@@ -237,56 +237,112 @@ export function setupRoutes(db: Db) {
     res.status(204).end();
   });
 
-  // ------------------------------------------------------------------ Profesores
+  // ------------------------------------------------------------------ Profesores (RQ62: asignados a sedes)
   const classesPerm = requirePerm('classes');
-  const teacherBody = z.object({ fullName: text(120), kind: z.enum(['internal', 'external']), phone: optText(30), email: optText(120), specialty: optText(120), active: z.boolean().default(true) });
+  const teacherBody = z.object({
+    fullName: text(120), kind: z.enum(['internal', 'external']), phone: optText(30), email: optText(120), specialty: optText(120),
+    active: z.boolean().default(true),
+    siteIds: z.array(id).min(1, 'Asigna el profesor al menos a una sede'),
+  });
+
+  /** Profesores con las sedes (y academias) en las que pueden dar clase */
+  const loadTeachers = async (tenantId: number, teacherId?: number) => {
+    const rows = await db.query(
+      `SELECT * FROM teachers WHERE tenant_id = $1 AND ($2::int IS NULL OR id = $2) ORDER BY active DESC, full_name`,
+      [tenantId, teacherId ?? null],
+    );
+    const links = rows.length
+      ? await db.query(
+          `SELECT ts.teacher_id, s.id, s.name, s.academy_id, a.name AS academy_name
+             FROM teacher_sites ts JOIN sites s ON s.id = ts.site_id JOIN academies a ON a.id = s.academy_id
+            WHERE ts.teacher_id IN ${idList(rows.map((t) => t.id))} ORDER BY a.name, s.name`,
+        )
+      : [];
+    return rows.map((t) => ({
+      ...t,
+      sites: links.filter((l) => l.teacher_id === t.id).map((l) => ({ id: l.id, name: l.name, academy_id: l.academy_id, academy_name: l.academy_name })),
+    }));
+  };
+
+  const saveTeacherSites = async (q: Db, teacherId: number, siteIds: number[]) => {
+    await q.query(`DELETE FROM teacher_sites WHERE teacher_id = $1`, [teacherId]);
+    for (const sid of new Set(siteIds)) await q.query(`INSERT INTO teacher_sites (teacher_id, site_id) VALUES ($1, $2)`, [teacherId, sid]);
+  };
 
   r.get('/teachers', classesPerm, async (req, res) => {
-    res.json(await db.query(`SELECT * FROM teachers WHERE tenant_id = $1 ORDER BY active DESC, full_name`, [req.user.tenantId]));
+    res.json(await loadTeachers(req.user.tenantId));
   });
 
   r.post('/teachers', classesPerm, async (req, res) => {
     const b = parse(teacherBody, req.body);
-    const [t] = await db.query(
-      `INSERT INTO teachers (tenant_id, full_name, kind, phone, email, specialty, active) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [req.user.tenantId, b.fullName, b.kind, b.phone, b.email, b.specialty, b.active],
-    );
-    res.status(201).json(t);
+    await ownAll(db, 'sites', b.siteIds, req.user.tenantId);
+    const teacherId = await db.tx(async (q) => {
+      const [t] = await q.query(
+        `INSERT INTO teachers (tenant_id, full_name, kind, phone, email, specialty, active) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [req.user.tenantId, b.fullName, b.kind, b.phone, b.email, b.specialty, b.active],
+      );
+      await saveTeacherSites(q, t.id, b.siteIds);
+      return t.id as number;
+    });
+    res.status(201).json((await loadTeachers(req.user.tenantId, teacherId))[0]);
   });
 
   r.put('/teachers/:id', classesPerm, async (req, res) => {
     const t = await own(db, 'teachers', parse(id, req.params.id), req.user.tenantId, 'Profesor');
     const b = parse(teacherBody, req.body);
-    const [row] = await db.query(
-      `UPDATE teachers SET full_name = $2, kind = $3, phone = $4, email = $5, specialty = $6, active = $7 WHERE id = $1 RETURNING *`,
-      [t.id, b.fullName, b.kind, b.phone, b.email, b.specialty, b.active],
-    );
-    res.json(row);
+    await ownAll(db, 'sites', b.siteIds, req.user.tenantId);
+    await db.tx(async (q) => {
+      await q.query(
+        `UPDATE teachers SET full_name = $2, kind = $3, phone = $4, email = $5, specialty = $6, active = $7 WHERE id = $1`,
+        [t.id, b.fullName, b.kind, b.phone, b.email, b.specialty, b.active],
+      );
+      await saveTeacherSites(q, t.id, b.siteIds);
+    });
+    res.json((await loadTeachers(req.user.tenantId, t.id))[0]);
   });
 
-  // ------------------------------------------------------------------ Clases
-  const classBody = z.object({ academyId: id, teacherId: optId.nullable(), name: text(120), description: optText(), defaultCapacity: z.coerce.number().int().positive(), active: z.boolean().default(true) });
+  // ------------------------------------------------------------------ Clases (RQ61: con espacio y profesor)
+  const classBody = z.object({
+    academyId: id,
+    teacherId: z.coerce.number({ error: 'Asigna el profesor que dará la clase' }).int().positive(),
+    spaceId: z.coerce.number({ error: 'Asigna el espacio donde se dará la clase' }).int().positive(),
+    name: text(120), description: optText(), defaultCapacity: z.coerce.number().int().positive(), active: z.boolean().default(true),
+  });
 
   r.get('/classes', async (req, res) => {
     const ids = await visibleAcademyIds(db, req);
     res.json(await db.query(
-      `SELECT c.*, a.name AS academy_name, t.full_name AS teacher_name, t.kind AS teacher_kind
+      `SELECT c.*, a.name AS academy_name, t.full_name AS teacher_name, t.kind AS teacher_kind,
+              sp.name AS space_name, s.id AS site_id, s.name AS site_name
          FROM classes c JOIN academies a ON a.id = c.academy_id LEFT JOIN teachers t ON t.id = c.teacher_id
+         LEFT JOIN spaces sp ON sp.id = c.space_id LEFT JOIN sites s ON s.id = sp.site_id
         WHERE c.academy_id IN ${idList(ids)} ORDER BY c.active DESC, a.name, c.name`,
     ));
   });
 
+  /** El espacio debe ser de una sede de la academia, el profesor debe estar asignado a esa sede y el cupo cabe */
   const checkClassRefs = async (req: Request, b: z.infer<typeof classBody>) => {
     await own(db, 'academies', b.academyId, req.user.tenantId, 'Academia');
-    if (b.teacherId) await own(db, 'teachers', b.teacherId, req.user.tenantId, 'Profesor');
+    await own(db, 'teachers', b.teacherId, req.user.tenantId, 'Profesor');
+    const [sp] = await db.query(
+      `SELECT sp.id, sp.name, sp.max_capacity, sp.allow_multi_group, sp.capacity_per_group, s.id AS site_id, s.name AS site_name, s.academy_id
+         FROM spaces sp JOIN sites s ON s.id = sp.site_id WHERE sp.id = $1 AND sp.tenant_id = $2`,
+      [b.spaceId, req.user.tenantId],
+    );
+    if (!sp) throw new HttpError(404, 'Espacio no encontrado', 'NOT_FOUND');
+    if (sp.academy_id !== b.academyId) throw new HttpError(400, 'El espacio debe ser de una sede de la academia de la clase', 'SPACE_ACADEMY');
+    const [assigned] = await db.query(`SELECT 1 FROM teacher_sites WHERE teacher_id = $1 AND site_id = $2`, [b.teacherId, sp.site_id]);
+    if (!assigned) throw new HttpError(400, `El profesor no está asignado a la sede ${sp.site_name}. Asígnalo en Profesores.`, 'TEACHER_SITE');
+    const limit = sp.allow_multi_group && sp.capacity_per_group ? sp.capacity_per_group : sp.max_capacity;
+    if (b.defaultCapacity > limit) throw new HttpError(400, `El cupo de la clase supera el aforo permitido en ${sp.name} (${limit})`, 'CAPACITY_EXCEEDED');
   };
 
   r.post('/classes', classesPerm, async (req, res) => {
     const b = parse(classBody, req.body);
     await checkClassRefs(req, b);
     const [c] = await db.query(
-      `INSERT INTO classes (tenant_id, academy_id, teacher_id, name, description, default_capacity, active) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [req.user.tenantId, b.academyId, b.teacherId ?? null, b.name, b.description, b.defaultCapacity, b.active],
+      `INSERT INTO classes (tenant_id, academy_id, teacher_id, space_id, name, description, default_capacity, active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [req.user.tenantId, b.academyId, b.teacherId, b.spaceId, b.name, b.description, b.defaultCapacity, b.active],
     );
     res.status(201).json(c);
   });
@@ -296,8 +352,8 @@ export function setupRoutes(db: Db) {
     const b = parse(classBody, req.body);
     await checkClassRefs(req, b);
     const [row] = await db.query(
-      `UPDATE classes SET academy_id = $2, teacher_id = $3, name = $4, description = $5, default_capacity = $6, active = $7 WHERE id = $1 RETURNING *`,
-      [c.id, b.academyId, b.teacherId ?? null, b.name, b.description, b.defaultCapacity, b.active],
+      `UPDATE classes SET academy_id = $2, teacher_id = $3, space_id = $4, name = $5, description = $6, default_capacity = $7, active = $8 WHERE id = $1 RETURNING *`,
+      [c.id, b.academyId, b.teacherId, b.spaceId, b.name, b.description, b.defaultCapacity, b.active],
     );
     res.json(row);
   });

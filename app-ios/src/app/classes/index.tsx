@@ -22,7 +22,7 @@ export default function Classes() {
               icon="school-outline"
               title={c.name}
               muted={!c.active}
-              subtitle={`${c.academy_name} · cupo ${c.default_capacity}${c.teacher_name ? ` · ${c.teacher_name}${c.teacher_kind === 'external' ? ' (externo)' : ''}` : ' · sin profesor'}`}
+              subtitle={`${c.academy_name} · ${c.site_name ? `${c.site_name} · ${c.space_name}` : 'sin espacio asignado'} · cupo ${c.default_capacity}\n${c.teacher_name ? `Prof. ${c.teacher_name}${c.teacher_kind === 'external' ? ' (externo)' : ''}` : 'sin profesor'}`}
               onPress={() => router.push({ pathname: '/classes/edit', params: { id: String(c.id) } })}
             />
           ))}
@@ -37,7 +37,7 @@ export default function Classes() {
               icon="person-outline"
               title={t.full_name}
               muted={!t.active}
-              subtitle={[t.specialty, t.phone].filter(Boolean).join(' · ') || null}
+              subtitle={`${t.sites.length ? t.sites.map((x) => x.name).join(', ') : 'Sin sede asignada'}${t.specialty ? ` · ${t.specialty}` : ''}`}
               right={<Badge text={t.kind === 'external' ? 'Externo' : 'Interno'} tone={t.kind === 'external' ? 'accent' : 'primary'} />}
               onPress={() => router.push({ pathname: '/teachers/edit', params: { id: String(t.id) } })}
             />

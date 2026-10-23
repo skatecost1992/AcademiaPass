@@ -27,8 +27,13 @@ export interface Space {
   max_capacity: number; allow_multi_group: boolean; max_groups: number; capacity_per_group: number | null; active: boolean; photos: number;
   opening_hours: OpeningSlot[] | null; // RQ40: null = el de la sede
 }
-export interface Teacher { id: number; full_name: string; kind: 'internal' | 'external'; phone: string | null; email: string | null; specialty: string | null; active: boolean }
-export interface ClassDef { id: number; academy_id: number; academy_name: string; teacher_id: number | null; teacher_name: string | null; teacher_kind: string | null; name: string; description: string | null; default_capacity: number; active: boolean }
+export interface Teacher {
+  id: number; full_name: string; kind: 'internal' | 'external'; phone: string | null; email: string | null; specialty: string | null; active: boolean;
+  sites: { id: number; name: string; academy_id: number; academy_name: string }[]; // RQ62
+}
+export interface ClassDef { id: number; academy_id: number; academy_name: string; teacher_id: number | null; teacher_name: string | null; teacher_kind: string | null; name: string; description: string | null; default_capacity: number; active: boolean;
+  space_id: number | null; space_name: string | null; site_id: number | null; site_name: string | null; // RQ61
+}
 export interface Booking {
   id: number; kind: 'class' | 'rental'; title: string; starts_at: string; ends_at: string; group_size: number; status: string; notes: string | null;
   site_id: number; space_id: number; class_id: number | null; teacher_id: number | null; client_id: number | null;

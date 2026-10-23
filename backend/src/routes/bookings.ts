@@ -47,6 +47,23 @@ export const BOOKING_SELECT = `
     LEFT JOIN teachers t ON t.id = b.teacher_id
     LEFT JOIN users cu ON cu.id = b.client_id`;
 
+/** RQ62: un profesor solo puede estar en una sede (y una clase) a la vez */
+async function assertTeacherFree(db: Db, teacherId: number, start: Date, end: Date) {
+  const [clash] = await db.query(
+    `SELECT b.title, b.starts_at, b.ends_at, s.name AS site_name, sp.name AS space_name, t.full_name
+       FROM bookings b JOIN sites s ON s.id = b.site_id JOIN spaces sp ON sp.id = b.space_id JOIN teachers t ON t.id = b.teacher_id
+      WHERE b.teacher_id = $1 AND b.status = 'confirmed' AND b.starts_at < $3 AND b.ends_at > $2
+      ORDER BY b.starts_at`,
+    [teacherId, start, end],
+  );
+  if (clash) {
+    const hm = (d: Date | string) => localParts(new Date(d)).time;
+    throw new HttpError(409,
+      `${clash.full_name} ya tiene "${clash.title}" en ${clash.site_name} · ${clash.space_name} de ${hm(clash.starts_at)} a ${hm(clash.ends_at)}: un profesor no puede estar en dos clases a la vez.`,
+      'TEACHER_BUSY');
+  }
+}
+
 async function loadSpace(db: Db, spaceId: number, tenantId: number) {
   const [sp] = await db.query(
     `SELECT sp.*, s.name AS site_name, s.opening_hours AS site_hours, s.academy_id, s.active AS site_active
@@ -78,11 +95,21 @@ async function createBookings(db: Db, req: Request, b: z.infer<typeof bookingBod
     if (!b.classId) throw new HttpError(400, 'classId: Selecciona la clase');
     const c = await own(db, 'classes', b.classId, tenantId, 'Clase');
     if (c.academy_id !== space.academy_id) throw new HttpError(400, 'La clase y el espacio pertenecen a academias distintas');
+    // RQ61: la clase tiene asignado su espacio; sus sesiones se programan alli
+    if (c.space_id && c.space_id !== space.id) {
+      const [own2] = await db.query(`SELECT name FROM spaces WHERE id = $1`, [c.space_id]);
+      throw new HttpError(400, `La clase ${c.name} se da en ${own2?.name ?? 'otro espacio'}: programa la sesión en ese espacio`, 'CLASS_SPACE');
+    }
     title = title || c.name;
     teacherId = teacherId ?? c.teacher_id;
     groupSize = groupSize ?? Math.min(c.default_capacity, space.allow_multi_group && space.capacity_per_group ? space.capacity_per_group : space.max_capacity);
   }
-  if (teacherId) await own(db, 'teachers', teacherId, tenantId, 'Profesor');
+  if (teacherId) {
+    await own(db, 'teachers', teacherId, tenantId, 'Profesor');
+    // RQ62: el profesor debe estar asignado a la sede del espacio
+    const [assigned] = await db.query(`SELECT 1 FROM teacher_sites WHERE teacher_id = $1 AND site_id = $2`, [teacherId, space.site_id]);
+    if (!assigned) throw new HttpError(400, `El profesor no está asignado a la sede ${space.site_name}. Asígnalo en Profesores.`, 'TEACHER_SITE');
+  }
   if (b.clientId) {
     const cl = await own(db, 'users', b.clientId, tenantId, 'Cliente');
     if (cl.role !== 'client') throw new HttpError(400, 'clientId no es un cliente');
@@ -113,6 +140,7 @@ async function createBookings(db: Db, req: Request, b: z.infer<typeof bookingBod
           throw err;
         }
         if (b.clientId) await assertNoOverlap(q, b.clientId, s, e); // RQ38
+        if (teacherId) await assertTeacherFree(q, teacherId, s, e); // RQ62
       } catch (err) {
         if (err instanceof HttpError && b.repeatWeeks > 1) err.message = `Semana ${i + 1} (${s.toISOString().slice(0, 10)}): ${err.message}`;
         throw err;

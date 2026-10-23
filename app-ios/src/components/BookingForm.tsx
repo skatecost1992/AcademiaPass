@@ -38,17 +38,27 @@ function SpaceInfo({ space, site }: { space: Space; site?: Site }) {
   );
 }
 
-function DayAgenda({ spaceId, date }: { spaceId: number; date: string }) {
-  const list = useLoad<Booking[]>(isDate(date) ? `/bookings${qs({ spaceId, from: date, to: date })}` : null);
-  const free = useLoad<{ available: string[] }>(isDate(date) ? `/spaces/${spaceId}/availability${qs({ date })}` : null);
-  const items = list.data ?? [];
+interface DayAvailability { available: string[]; capacity: number; busy: { from: string; to: string; label: string; spotsLeft: number }[] }
+
+/**
+ * Ocupacion del espacio en el dia elegido. RQ60: el cliente solo ve cada franja como "Reservado" y los cupos
+ * libres, sin datos de quien reservo; el personal ve ademas el titulo de cada reserva.
+ */
+function DayAgenda({ spaceId, date, anonymous }: { spaceId: number; date: string; anonymous: boolean }) {
+  const list = useLoad<Booking[]>(!anonymous && isDate(date) ? `/bookings${qs({ spaceId, from: date, to: date })}` : null);
+  const day = useLoad<DayAvailability>(isDate(date) ? `/spaces/${spaceId}/availability${qs({ date })}` : null);
+  const busy = day.data?.busy ?? [];
   return (
     <Card>
       <Text style={{ fontWeight: '700', color: colors.text, marginBottom: 4 }}>Ocupación del espacio ese día</Text>
       <Muted style={{ fontSize: 12, marginBottom: 4, color: colors.success }}>
-        Horarios disponibles: {free.data ? (free.data.available.length ? free.data.available.join(' · ') : 'ninguno ese día') : '…'}
+        Horarios disponibles: {day.data ? (day.data.available.length ? day.data.available.join(' · ') : 'ninguno ese día') : '…'}
       </Muted>
-      {items.length === 0 ? <Muted>Sin clases ni reservas ese día.</Muted> : items.map((b) => (
+      {anonymous ? (
+        busy.length === 0 ? <Muted>Sin reservas ese día.</Muted> : busy.map((b, i) => (
+          <InfoRow key={i} label={`${b.from}–${b.to} · ${b.label}`} value={b.spotsLeft > 0 ? `${b.spotsLeft} cupo(s) libre(s)` : 'Sin cupos'} />
+        ))
+      ) : (list.data ?? []).length === 0 ? <Muted>Sin clases ni reservas ese día.</Muted> : (list.data ?? []).map((b) => (
         <InfoRow key={b.id} label={`${fmtTime(b.starts_at)}–${fmtTime(b.ends_at)}`} value={`${b.title} · ${b.group_size} pers.`} />
       ))}
     </Card>
@@ -131,7 +141,13 @@ export function BookingForm({ mode, initialKind = 'class' }: { mode: 'client' | 
       {mode === 'staff' && kind === 'class' && academyId ? (
         <>
           <Chips label="Clase" options={academyClasses.map((c) => ({ value: c.id, label: c.name }))} value={classId ?? undefined}
-            onChange={(id) => { setClassId(id); setTeacherId(academyClasses.find((c) => c.id === id)?.teacher_id ?? null); }}
+            onChange={(id) => {
+              // RQ61: la clase ya trae su sede, su espacio y su profesor
+              const c = academyClasses.find((x) => x.id === id);
+              setClassId(id);
+              setTeacherId(c?.teacher_id ?? null);
+              if (c?.site_id && c.space_id) { setSiteId(c.site_id); setSpaceId(c.space_id); }
+            }}
             hint={academyClasses.length ? undefined : 'Crea primero las clases de esta academia en "Clases y profesores".'} />
           {/* RQ54: se ve el profesor que dara la clase (por defecto el de la clase; se puede cambiar para esta sesion) */}
           {classId ? (
@@ -144,7 +160,7 @@ export function BookingForm({ mode, initialKind = 'class' }: { mode: 'client' | 
               })()}
             </Card>
           ) : null}
-          <Chips<number | null> label="Cambiar profesor para esta sesión" options={(teachers.data ?? []).filter((t) => t.active).map((t) => ({ value: t.id as number | null, label: `${t.full_name}${t.kind === 'external' ? ' (externo)' : ''}` }))} value={teacherId} onChange={setTeacherId} />
+          <Chips<number | null> label="Cambiar profesor para esta sesión" options={(teachers.data ?? []).filter((t) => t.active && (!siteId || t.sites.some((x) => x.id === siteId))).map((t) => ({ value: t.id as number | null, label: `${t.full_name}${t.kind === 'external' ? ' (externo)' : ''}` }))} value={teacherId} onChange={setTeacherId} />
         </>
       ) : null}
 
@@ -152,7 +168,7 @@ export function BookingForm({ mode, initialKind = 'class' }: { mode: 'client' | 
         <>
           <Chips label="Reservado para" options={[{ value: 'teacher' as const, label: 'Profesor' }, { value: 'client' as const, label: 'Cliente' }, { value: 'other' as const, label: 'Otro' }]} value={forWho} onChange={setForWho} />
           {forWho === 'teacher' ? (
-            <Chips<number | null> label="Profesor (interno o externo)" options={(teachers.data ?? []).filter((t) => t.active).map((t) => ({ value: t.id as number | null, label: `${t.full_name} · ${t.kind === 'external' ? 'externo' : 'interno'}` }))} value={teacherId} onChange={setTeacherId} />
+            <Chips<number | null> label="Profesor (interno o externo)" options={(teachers.data ?? []).filter((t) => t.active && (!siteId || t.sites.some((x) => x.id === siteId))).map((t) => ({ value: t.id as number | null, label: `${t.full_name} · ${t.kind === 'external' ? 'externo' : 'interno'}` }))} value={teacherId} onChange={setTeacherId} />
           ) : null}
           {forWho === 'client' ? (
             <>
@@ -179,7 +195,7 @@ export function BookingForm({ mode, initialKind = 'class' }: { mode: 'client' | 
         ) : null}
         <Field label="Notas" value={f.notes} onChangeText={set('notes')} multiline />
       </Section>
-      {spaceId ? <DayAgenda spaceId={spaceId} date={f.date} /> : null}
+      {spaceId ? <DayAgenda spaceId={spaceId} date={f.date} anonymous={mode === 'client'} /> : null}
       {space && f.groupSize && Number(f.groupSize) > space.max_capacity ? <Badge text="Supera el aforo del espacio" tone="danger" /> : null}
       <Gap />
       <Button label={mode === 'client' ? 'Reservar' : 'Guardar en la agenda'} onPress={submit} loading={busy} disabled={!spaceId} />

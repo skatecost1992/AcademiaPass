@@ -48,13 +48,16 @@ export const BOOKING_SELECT = `
 
 async function loadSpace(db: Db, spaceId: number, tenantId: number) {
   const [sp] = await db.query(
-    `SELECT sp.*, s.name AS site_name, s.opening_hours, s.academy_id, s.active AS site_active
+    `SELECT sp.*, s.name AS site_name, s.opening_hours AS site_hours, s.academy_id, s.active AS site_active
        FROM spaces sp JOIN sites s ON s.id = sp.site_id WHERE sp.id = $1 AND sp.tenant_id = $2`,
     [spaceId, tenantId],
   );
   if (!sp) throw new HttpError(404, 'Espacio no encontrado', 'NOT_FOUND');
   if (!sp.active || !sp.site_active) throw new HttpError(409, 'El espacio o la sede están inactivos', 'INACTIVE');
-  return sp as Space & { site_name: string; opening_hours: any[]; academy_id: number };
+  const parseHours = (v: unknown) => (typeof v === 'string' ? JSON.parse(v) : v);
+  return { ...sp, site_hours: parseHours(sp.site_hours) ?? [], opening_hours: parseHours(sp.opening_hours) } as Space & {
+    site_name: string; site_hours: any[]; opening_hours: any[] | null; academy_id: number;
+  };
 }
 
 /** Crea una o varias reservas semanales validando cada una; si alguna choca no se guarda ninguna */
@@ -92,7 +95,9 @@ async function createBookings(db: Db, req: Request, b: z.infer<typeof bookingBod
       const s = new Date(start.getTime() + i * WEEK_MS);
       const e = new Date(end.getTime() + i * WEEK_MS);
       try {
-        assertWithinOpeningHours(space.site_name, space.opening_hours, s, e);
+        assertWithinOpeningHours(space.site_name, space.site_hours, s, e);
+        // RQ40: si el espacio tiene su propio horario de disponibilidad, tambien debe caber en el
+        if (space.opening_hours?.length) assertWithinOpeningHours(space.name, space.opening_hours, s, e, 'el espacio');
         await assertSpaceAvailable(q, space, s, e, groupSize!);
         if (b.clientId) await assertNoOverlap(q, b.clientId, s, e); // RQ38
       } catch (err) {

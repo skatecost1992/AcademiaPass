@@ -56,6 +56,54 @@ export function Bars({ rows, empty = 'Sin registros en el periodo.' }: { rows: {
   );
 }
 
+export interface ClassesReport {
+  totals: { reserved: number; taken: number; takenWithReservation: number; missed: number; upcoming: number };
+  byClass: { title: string; reserved: number; taken: number; missed: number }[];
+  rows: {
+    reservation_id: number | null; client_id: number; client_name: string; booking_id: number; title: string; starts_at: string;
+    site_name: string; academy_name: string; attended_at: string | null; reserved: boolean; state: 'taken' | 'missed' | 'reserved' | 'cancelled';
+  }[];
+}
+
+const CLASS_STATE = {
+  taken: ['Tomada', 'success'], missed: ['No asistió', 'danger'], reserved: ['Reservada', 'primary'], cancelled: ['Clase cancelada', 'muted'],
+} as const;
+
+/** Clases reservadas y tomadas (RQ41). Con `showClient` muestra el cliente de cada fila (vista del personal) */
+export function ClassesReportView({ report, showClient }: { report: ClassesReport; showClient?: boolean }) {
+  const t = report.totals;
+  return (
+    <View>
+      <KpiRow>
+        <Kpi label="Reservadas" value={t.reserved} icon="bookmark" />
+        <Kpi label="Tomadas" value={t.taken} icon="checkmark-done" tone="success" />
+        <Kpi label="No asistió" value={t.missed} icon="close-circle" tone="danger" />
+        <Kpi label="Por venir" value={t.upcoming} icon="time" tone="accent" />
+      </KpiRow>
+      <Section title="Por clase">
+        <Bars rows={report.byClass.map((c) => ({ label: c.title, value: c.reserved + c.taken, right: `${c.reserved} reservadas · ${c.taken} tomadas${c.missed ? ` · ${c.missed} sin asistir` : ''}` }))} />
+      </Section>
+      <Section title="Detalle">
+        {report.rows.length === 0 ? <Empty text="Sin clases reservadas ni tomadas en el periodo." icon="school-outline" /> : (
+          <Card>
+            {report.rows.slice(0, 100).map((r, i) => (
+              <View key={`${r.booking_id}-${r.client_id}-${i}`} style={s.att}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
+                  <Text style={[s.attDate, { flex: 1 }]}>{r.title} · {fmtDateTime(r.starts_at)}</Text>
+                  <Badge text={CLASS_STATE[r.state][0]} tone={CLASS_STATE[r.state][1]} />
+                </View>
+                <Muted style={{ fontSize: 12 }}>
+                  {showClient ? `${r.client_name} · ` : ''}{r.academy_name} · {r.site_name}{r.reserved ? '' : ' · sin reserva previa'}
+                </Muted>
+              </View>
+            ))}
+          </Card>
+        )}
+      </Section>
+    </View>
+  );
+}
+
 export function UnifiedReportView({ report, groupBy }: { report: UnifiedReport; groupBy: GroupBy }) {
   const [busy, setBusy] = useState(false);
   const periods = groupBy === 'week' ? report.weekly : report.monthly;

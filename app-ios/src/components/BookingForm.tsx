@@ -22,6 +22,9 @@ function SpaceInfo({ space, site }: { space: Space; site?: Site }) {
       {space.description ? <Muted style={{ marginBottom: 6 }}>{space.description}</Muted> : null}
       <PhotoGallery ownerType="space" ownerId={space.id} editable={false} />
       <InfoRow label="Aforo máximo" value={`${space.max_capacity} personas`} />
+      {space.opening_hours?.length ? (
+        <Muted style={{ fontSize: 12 }}>Disponible: {space.opening_hours.map((h) => `${DAYS[h.day]} ${h.open}-${h.close}`).join(' · ')}</Muted>
+      ) : null}
       <InfoRow label="Grupos simultáneos" value={space.allow_multi_group ? `hasta ${space.max_groups}${space.capacity_per_group ? ` de ${space.capacity_per_group} personas` : ''}` : 'Uno a la vez'} />
       {day.length ? (
         <Muted style={{ fontSize: 12, marginTop: 4 }}>

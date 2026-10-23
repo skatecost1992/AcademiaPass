@@ -4,7 +4,7 @@
  */
 import { router } from 'expo-router';
 import React, { useState } from 'react';
-import { Bars, RangePicker, useRange } from '../components/ReportParts';
+import { Bars, ClassesReportView, RangePicker, useRange } from '../components/ReportParts';
 import { PlacePicker } from '../components/shared';
 import { Badge, Button, Card, Chips, Empty, InfoRow, Kpi, KpiRow, ListItem, Loader, Muted, Screen, Section, errorText, notify, useLoad } from '../components/ui';
 import { qs } from '../lib/api';
@@ -13,7 +13,7 @@ import { sharePdf } from '../lib/pdf';
 import { summaryReportHtml } from '../lib/report';
 import { useSession } from '../session';
 
-type Tab = 'summary' | 'attendance' | 'capacity' | 'payments';
+type Tab = 'summary' | 'attendance' | 'classes' | 'capacity' | 'payments';
 type G = 'week' | 'month';
 
 function AttendanceView({ a, g }: { a: any; g: G }) {
@@ -94,6 +94,7 @@ export default function Reports() {
   const tabs = [
     can('reports') && { value: 'summary' as Tab, label: 'Resumen' },
     can('reports') && { value: 'attendance' as Tab, label: 'Asistencia' },
+    can('reports') && { value: 'classes' as Tab, label: 'Clases' },
     can('capacity_reports') && { value: 'capacity' as Tab, label: 'Aforo' },
     can('reports') && { value: 'payments' as Tab, label: 'Pagos' },
   ].filter(Boolean) as { value: Tab; label: string }[];
@@ -102,7 +103,7 @@ export default function Reports() {
   const [academyId, setAcademyId] = useState<number | null>(null);
   const [siteId, setSiteId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
-  const path = { summary: '/reports/summary', attendance: '/reports/attendance', capacity: '/reports/capacity', payments: '/reports/payments' }[tab];
+  const path = { summary: '/reports/summary', attendance: '/reports/attendance', classes: '/reports/classes', capacity: '/reports/capacity', payments: '/reports/payments' }[tab];
   const data = useLoad<any>(`${path}${qs({ from: range.from, to: range.to, groupBy: range.groupBy, academyId, siteId })}`);
   const g = (data.data?.groupBy ?? range.groupBy) as G;
 
@@ -127,6 +128,7 @@ export default function Reports() {
       <Loader state={data}>
         {(d) => {
           if (tab === 'attendance') return <AttendanceView a={d} g={g} />;
+          if (tab === 'classes') return <ClassesReportView report={d} showClient />;
           if (tab === 'capacity') return <CapacityView c={d} g={g} />;
           if (tab === 'payments') return <PaymentsView p={d} g={g} />;
           if (!d.kpi) return null;

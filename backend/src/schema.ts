@@ -259,4 +259,7 @@ CREATE TABLE IF NOT EXISTS capacity_requests (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS capacity_requests_pending_idx ON capacity_requests (tenant_id, status);
+
+-- RQ40: horario de disponibilidad propio del espacio (NULL = el de la sede)
+ALTER TABLE spaces ADD COLUMN IF NOT EXISTS opening_hours jsonb;
 `;

@@ -367,6 +367,38 @@ describe('AcademiaPass API', () => {
     assert.equal(history.find((x: any) => x.id === request.id).resolved_by_name, 'Ana Admin');
   });
 
+  it('valida el ingreso solo el mismo dia desde 1 h antes, respeta el horario del espacio y reporta clases (RQ39, RQ40, RQ41)', async () => {
+    const tomorrow = (h: number, m = 0) => new Date(new Date(todayAt(h, m)).getTime() + 24 * 3600_000);
+    const dayInBogota = new Date(tomorrow(12).getTime() - 5 * 3600_000).getUTCDay(); // dia de la semana en Bogota
+
+    // RQ40: horario propio del espacio, dentro del de la sede (05:00-23:00)
+    const sala = await ok('POST', '/spaces', { siteId: s.siteA1.id, name: 'Sala mañanas', maxCapacity: 8 }, s.admin);
+    const bad = await call('PUT', `/spaces/${sala.id}`, { siteId: s.siteA1.id, name: 'Sala mañanas', maxCapacity: 8, openingHours: [{ day: dayInBogota, open: '04:00', close: '12:00' }] }, s.admin);
+    assert.equal(bad.body.code, 'SPACE_HOURS');
+    await ok('PUT', `/spaces/${sala.id}`, { siteId: s.siteA1.id, name: 'Sala mañanas', maxCapacity: 8, openingHours: [{ day: dayInBogota, open: '08:00', close: '12:00' }] }, s.admin);
+    const late = await call('POST', '/bookings', { spaceId: sala.id, kind: 'class', classId: s.salsa.id, startsAt: tomorrow(18).toISOString(), endsAt: tomorrow(19).toISOString() }, s.admin);
+    assert.equal(late.body.code, 'OUT_OF_HOURS');
+    assert.ok(late.body.error.includes('el espacio'));
+    const [morning] = await ok('POST', '/bookings', { spaceId: sala.id, kind: 'class', classId: s.salsa.id, startsAt: tomorrow(9).toISOString(), endsAt: tomorrow(10).toISOString() }, s.admin);
+
+    // RQ39: una clase de manana no se valida hoy
+    await ok('POST', '/me/class-reservations', { bookingId: morning.id }, s.client);
+    const early = await call('POST', '/attendance/scan', { clientId: s.clientId, academyId: s.academyA.id, siteId: s.siteA1.id, bookingId: morning.id }, s.admin);
+    assert.equal(early.body.code, 'OUT_OF_TIME');
+    assert.ok(early.body.error.includes('08:00'), 'informa desde que hora (1 h antes del inicio)');
+
+    // RQ41: reservadas y tomadas; el cliente solo ve lo suyo, el personal con reportes ve a todos
+    const range = `from=${new Date(Date.now() - 5 * 3600_000 - 86400_000).toISOString().slice(0, 10)}&to=${new Date(tomorrow(12).getTime() - 5 * 3600_000).toISOString().slice(0, 10)}`;
+    const mine = await ok('GET', `/reports/classes?${range}&clientId=999`, undefined, s.client);
+    assert.ok(mine.rows.length > 0 && mine.rows.every((r: any) => r.client_id === s.clientId), 'el cliente solo ve su informacion');
+    assert.ok(mine.rows.some((r: any) => r.booking_id === morning.id && r.state === 'reserved'));
+    const all = await ok('GET', `/reports/classes?${range}`, undefined, s.admin);
+    assert.ok(new Set(all.rows.map((r: any) => r.client_id)).size > 1, 'el personal ve a todos');
+    assert.ok(all.totals.taken >= 1 && all.totals.reserved >= 1);
+    const portero = (await ok('POST', '/auth/login', { username: 'portero', password: 'Clave.12345' })).token;
+    assert.equal((await call('GET', `/reports/classes?${range}`, undefined, portero)).status, 403);
+  });
+
   it('el cliente reserva un espacio y ve las reservas ajenas sin datos personales', async () => {
     const start = new Date(Date.now() + 26 * 3600_000);
     start.setUTCHours(15, 0, 0, 0); // 10:00 en Bogota

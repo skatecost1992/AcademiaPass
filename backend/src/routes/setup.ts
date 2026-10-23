@@ -31,6 +31,7 @@ const spaceBody = z.object({
   maxGroups: z.coerce.number().int().positive().default(1),
   capacityPerGroup: z.coerce.number().int().positive().optional().nullable(),
   active: z.boolean().default(true),
+  openingHours: openingHours.nullable().optional(), // RQ40: null = usa el horario de la sede
 }).refine((s) => !s.allowMultiGroup || (s.capacityPerGroup ?? 0) <= s.maxCapacity, { message: 'El cupo por grupo no puede superar el aforo', path: ['capacityPerGroup'] });
 
 // Una foto ya comprimida en el telefono (~1600 px, JPEG 0.8) pesa 200-600 KB; el limite deja margen
@@ -136,17 +137,25 @@ export function setupRoutes(db: Db) {
 
   const saveSpace = async (req: Request, existingId?: number) => {
     const b = parse(spaceBody, req.body);
-    await own(db, 'sites', b.siteId, req.user.tenantId, 'Sede');
-    const params = [b.siteId, b.name, b.description, b.maxCapacity, b.allowMultiGroup, b.allowMultiGroup ? b.maxGroups : 1, b.allowMultiGroup ? b.capacityPerGroup ?? null : null, b.active];
+    const site = await own(db, 'sites', b.siteId, req.user.tenantId, 'Sede');
+    // RQ40: el horario del espacio debe caber dentro del horario de atencion de la sede
+    const siteHours: { day: number; open: string; close: string }[] = typeof site.opening_hours === 'string' ? JSON.parse(site.opening_hours) : site.opening_hours ?? [];
+    const spaceHours = b.openingHours && b.openingHours.length ? b.openingHours : null;
+    for (const h of spaceHours ?? []) {
+      if (!siteHours.some((x) => x.day === h.day && x.open <= h.open && h.close <= x.close)) {
+        throw new HttpError(400, `El horario del espacio (${['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'][h.day]} ${h.open}-${h.close}) debe estar dentro del horario de atención de la sede`, 'SPACE_HOURS');
+      }
+    }
+    const params = [b.siteId, b.name, b.description, b.maxCapacity, b.allowMultiGroup, b.allowMultiGroup ? b.maxGroups : 1, b.allowMultiGroup ? b.capacityPerGroup ?? null : null, b.active, spaceHours ? JSON.stringify(spaceHours) : null];
     if (existingId) {
       const [row] = await db.query(
-        `UPDATE spaces SET site_id = $2, name = $3, description = $4, max_capacity = $5, allow_multi_group = $6, max_groups = $7, capacity_per_group = $8, active = $9 WHERE id = $1 RETURNING *`,
+        `UPDATE spaces SET site_id = $2, name = $3, description = $4, max_capacity = $5, allow_multi_group = $6, max_groups = $7, capacity_per_group = $8, active = $9, opening_hours = $10 WHERE id = $1 RETURNING *`,
         [existingId, ...params],
       );
       return row;
     }
     const [row] = await db.query(
-      `INSERT INTO spaces (tenant_id, site_id, name, description, max_capacity, allow_multi_group, max_groups, capacity_per_group, active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      `INSERT INTO spaces (tenant_id, site_id, name, description, max_capacity, allow_multi_group, max_groups, capacity_per_group, active, opening_hours) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
       [req.user.tenantId, ...params],
     );
     return row;

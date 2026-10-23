@@ -285,6 +285,10 @@ CREATE TABLE dbo.capacity_requests (
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'capacity_requests_pending_idx')
   CREATE INDEX capacity_requests_pending_idx ON dbo.capacity_requests (tenant_id, status);
 
+-- RQ40: horario de disponibilidad propio del espacio (NULL = el de la sede)
+IF COL_LENGTH(N'dbo.spaces', N'opening_hours') IS NULL
+  ALTER TABLE dbo.spaces ADD opening_hours NVARCHAR(MAX) NULL;
+
 DECLARE @tablas INT = (SELECT COUNT(*) FROM sys.tables WHERE name IN
   (N'tenants', N'persons', N'academies', N'sites', N'users', N'spaces', N'photos', N'teachers', N'classes', N'bookings',
    N'plans', N'plan_academies', N'plan_sites', N'client_academies', N'memberships', N'payments', N'attendances',

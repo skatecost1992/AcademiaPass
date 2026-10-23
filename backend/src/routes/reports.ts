@@ -197,6 +197,58 @@ async function paymentsReport(db: Db, tenantId: number, f: Filters) {
   };
 }
 
+/**
+ * RQ41: clases reservadas y clases tomadas. Por cada cupo reservado indica si el cliente asistio, si no asistio
+ * (la clase ya termino) o si sigue pendiente; ademas incluye las clases tomadas sin reserva previa.
+ */
+async function classesReport(db: Db, tenantId: number, f: Filters, clientId?: number) {
+  const [start, end] = dayBounds(f.from, f.to);
+  const params = [tenantId, start, end, f.academyId ?? null, f.siteId ?? null, clientId ?? null];
+  const where = `b.tenant_id = $1 AND b.kind = 'class' AND b.starts_at >= $2 AND b.starts_at < $3
+    AND ($4::int IS NULL OR s.academy_id = $4) AND ($5::int IS NULL OR b.site_id = $5)`;
+  const reserved: any[] = await db.query(
+    `SELECT cr.id AS reservation_id, cr.client_id, u.full_name AS client_name, cr.created_at AS reserved_at,
+            b.id AS booking_id, b.title, b.starts_at, b.ends_at, b.status AS booking_status, s.name AS site_name, a.name AS academy_name,
+            (SELECT max(att.scanned_at) FROM attendances att WHERE att.booking_id = b.id AND att.client_id = cr.client_id) AS attended_at
+       FROM class_reservations cr JOIN bookings b ON b.id = cr.booking_id JOIN users u ON u.id = cr.client_id
+       JOIN sites s ON s.id = b.site_id JOIN academies a ON a.id = s.academy_id
+      WHERE ${where} AND cr.status = 'confirmed' AND ($6::int IS NULL OR cr.client_id = $6)`,
+    params,
+  );
+  const walkIns: any[] = await db.query(
+    `SELECT att.client_id, u.full_name AS client_name, att.scanned_at AS attended_at,
+            b.id AS booking_id, b.title, b.starts_at, b.ends_at, b.status AS booking_status, s.name AS site_name, a.name AS academy_name
+       FROM attendances att JOIN bookings b ON b.id = att.booking_id JOIN users u ON u.id = att.client_id
+       JOIN sites s ON s.id = b.site_id JOIN academies a ON a.id = s.academy_id
+      WHERE ${where} AND ($6::int IS NULL OR att.client_id = $6)
+        AND NOT EXISTS (SELECT 1 FROM class_reservations cr WHERE cr.booking_id = b.id AND cr.client_id = att.client_id AND cr.status = 'confirmed')`,
+    params,
+  );
+  const now = Date.now();
+  const rows = [
+    ...reserved.map((r) => ({
+      ...r, reserved: true,
+      state: r.attended_at ? 'taken' : r.booking_status === 'cancelled' ? 'cancelled' : new Date(r.ends_at).getTime() < now ? 'missed' : 'reserved',
+    })),
+    ...walkIns.map((r) => ({ ...r, reservation_id: null, reserved_at: null, reserved: false, state: 'taken' })),
+  ].sort((x, y) => new Date(y.starts_at).getTime() - new Date(x.starts_at).getTime());
+  const count = (st: string) => rows.filter((r) => r.state === st).length;
+  return {
+    from: f.from, to: f.to,
+    totals: {
+      reserved: reserved.length,
+      taken: count('taken'),
+      takenWithReservation: rows.filter((r) => r.reserved && r.state === 'taken').length,
+      missed: count('missed'),
+      upcoming: count('reserved'),
+    },
+    byClass: [...groupBy(rows, (r) => r.title)].map(([title, list]) => ({
+      title, reserved: list.filter((r) => r.reserved).length, taken: list.filter((r) => r.state === 'taken').length, missed: list.filter((r) => r.state === 'missed').length,
+    })).sort((a, b) => b.reserved + b.taken - (a.reserved + a.taken)),
+    rows: rows.slice(0, 500),
+  };
+}
+
 export function reportRoutes(db: Db) {
   const r = Router();
   const readFilters = (q: unknown): Filters => {
@@ -214,6 +266,15 @@ export function reportRoutes(db: Db) {
     const c = await own(db, 'users', parse(id, req.params.id), req.user.tenantId, 'Cliente');
     const { from, to } = range(parse(filters, req.query));
     res.json(await unifiedReport(db, req.user.tenantId, c.id, from, to));
+  });
+
+  // RQ41: el personal con acceso a reportes ve a todos (o a un cliente); el cliente solo su propia informacion
+  r.get('/reports/classes', async (req, res) => {
+    const f = readFilters(req.query);
+    if (req.user.role === 'client') return res.json(await classesReport(db, req.user.tenantId, f, req.user.id));
+    if (!req.user.permissions.includes('reports')) throw new HttpError(403, 'No tienes permiso para esta acción', 'FORBIDDEN');
+    const clientId = parse(optId, req.query.clientId);
+    res.json(await classesReport(db, req.user.tenantId, f, clientId));
   });
 
   r.get('/reports/attendance', requirePerm('reports'), async (req, res) => {

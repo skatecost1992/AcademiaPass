@@ -3,7 +3,7 @@
     "name": "AcademiaPass",
     "slug": "academiapass-ios",
     "scheme": "academiapass",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "platforms": [
       "ios"
     ],
@@ -47,7 +47,7 @@
     },
     "ios": {
       "bundleIdentifier": "com.cristhianhernandez.academiapass",
-      "buildNumber": "7",
+      "buildNumber": "8",
       "supportsTablet": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,

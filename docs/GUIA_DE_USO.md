@@ -30,6 +30,11 @@ cliente (o busca por documento). Resultado:
   muestra a quién contactar (nombre, celular, correo) y el botón *Solicitar autorización*. La solicitud queda
   en **Autorizaciones**, donde quien tiene el permiso la aprueba (se registra el ingreso) o la rechaza.
 
+El ingreso a una clase o reserva solo se valida **el mismo día, desde 1 hora antes del inicio hasta la hora
+de finalización**. Cada espacio puede tener su propio **horario de disponibilidad** (dentro del de la sede):
+solo se reserva en esas franjas. En **Reportes → Clases** el personal ve las clases reservadas, tomadas y sin
+asistir de todos; cada cliente ve las suyas en *Mi reporte*.
+
 Las clases y reservas solo se agendan dentro del **horario de atención** de la sede; una sede sin horario
 configurado no admite agenda. Un cliente no puede tener dos reservas que se crucen en el tiempo.
 

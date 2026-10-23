@@ -13,7 +13,10 @@ import { z } from 'zod';
 import { type AuthUser, HttpError, effectivePermissions, requireAdmin, requirePerm, verifyQr } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { KINDS_FOR_CONTEXT, membershipsOf, pickMembership, type MembershipView } from '../lib/memberships.ts';
-import { dateStr, dayBounds, id, optId, own, parse, range } from '../lib/util.ts';
+import { dateStr, dayBounds, id, localParts, optId, own, parse, range } from '../lib/util.ts';
+
+/** RQ39: el ingreso se valida desde 1 hora antes del inicio */
+const ENTRY_WINDOW_MS = 3600_000;
 
 
 const scanBody = z.object({
@@ -67,9 +70,16 @@ async function performScan(db: Db, user: AuthUser, b: ScanInput) {
       booking = await own(db, 'bookings', b.bookingId, tenantId, 'Clase o reserva');
       if (booking.site_id !== site.id) throw new HttpError(400, 'La clase o reserva es de otra sede');
       if (booking.status !== 'confirmed') throw new HttpError(409, 'La clase o reserva está cancelada');
-      const now = Date.now();
-      if (now < new Date(booking.starts_at).getTime() - 2 * 3600_000 || now > new Date(booking.ends_at).getTime()) {
-        throw new HttpError(409, 'Solo se registran ingresos desde 2 horas antes del inicio hasta el final', 'OUT_OF_TIME');
+      // RQ39: solo el mismo dia, desde 1 hora antes del inicio hasta la hora de finalizacion
+      const now = new Date();
+      const start = new Date(booking.starts_at);
+      const end = new Date(booking.ends_at);
+      const sameDay = localParts(now).date === localParts(start).date;
+      if (!sameDay || now.getTime() < start.getTime() - ENTRY_WINDOW_MS || now > end) {
+        const hm = (d: Date) => localParts(d).time;
+        throw new HttpError(409,
+          `El ingreso a ${booking.title} solo se valida el ${localParts(start).date} de ${hm(new Date(start.getTime() - ENTRY_WINDOW_MS))} a ${hm(end)}`,
+          'OUT_OF_TIME');
       }
       context = booking.kind;
       const [dup] = await db.query(`SELECT 1 FROM attendances WHERE client_id = $1 AND booking_id = $2`, [client.id, booking.id]);

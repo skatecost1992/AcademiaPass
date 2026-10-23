@@ -1,10 +1,11 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useState } from 'react';
+import { OpeningHoursEditor } from '../../components/OpeningHoursEditor';
 import { PhotoGallery } from '../../components/PhotoGallery';
 import { Button, Card, Field, Gap, Loading, Muted, Screen, Section, Toggle, confirm, errorText, notify, useLoad } from '../../components/ui';
 import { del, post, put, qs } from '../../lib/api';
 import { useSession } from '../../session';
-import type { Space } from '../../types';
+import type { OpeningSlot, Space } from '../../types';
 
 /** Espacio con su aforo y grupos simultaneos (RQ19) y sus fotos (RQ29) */
 export default function SpaceEdit() {
@@ -14,6 +15,8 @@ export default function SpaceEdit() {
   const [id, setId] = useState<number | null>(params.id ? Number(params.id) : null);
   const spaces = useLoad<Space[]>(params.id ? `/spaces${qs({ siteId })}` : null);
   const [f, setF] = useState({ name: '', description: '', maxCapacity: '20', allowMultiGroup: false, maxGroups: '2', capacityPerGroup: '', active: true });
+  const [ownHours, setOwnHours] = useState(false);
+  const [hours, setHours] = useState<OpeningSlot[]>([]);
   const [loaded, setLoaded] = useState(!params.id);
   const [busy, setBusy] = useState(false);
 
@@ -24,6 +27,8 @@ export default function SpaceEdit() {
         name: s.name, description: s.description ?? '', maxCapacity: String(s.max_capacity), allowMultiGroup: s.allow_multi_group,
         maxGroups: String(s.max_groups), capacityPerGroup: s.capacity_per_group ? String(s.capacity_per_group) : '', active: s.active,
       });
+      setOwnHours(!!s.opening_hours?.length);
+      setHours(s.opening_hours ?? []);
       setLoaded(true);
     }
   }, [spaces.data, id, loaded]);
@@ -34,6 +39,7 @@ export default function SpaceEdit() {
       const body = {
         siteId, name: f.name, description: f.description || null, maxCapacity: Number(f.maxCapacity), allowMultiGroup: f.allowMultiGroup,
         maxGroups: Number(f.maxGroups) || 1, capacityPerGroup: f.capacityPerGroup ? Number(f.capacityPerGroup) : null, active: f.active,
+        openingHours: ownHours && hours.length ? hours : null,
       };
       if (id) {
         await put(`/spaces/${id}`, body);
@@ -76,6 +82,9 @@ export default function SpaceEdit() {
             <Field label="Asistentes por grupo" value={f.capacityPerGroup} onChangeText={(v) => setF({ ...f, capacityPerGroup: v })} keyboardType="number-pad" hint="Vacío = sin límite por grupo (solo el aforo total)." />
           </>
         ) : <Muted style={{ marginBottom: 10 }}>Si ya está reservado en un horario, no se podrá reservar de nuevo en ese horario.</Muted>}
+        <Toggle label="Horario de disponibilidad propio" value={ownHours} onChange={setOwnHours}
+          hint={ownHours ? 'Solo se podrá reservar en estas franjas; deben estar dentro del horario de la sede.' : 'Usa el horario de atención de la sede.'} />
+        {ownHours ? <OpeningHoursEditor value={hours} onChange={setHours} /> : null}
         <Toggle label="Espacio activo" value={f.active} onChange={(v) => setF({ ...f, active: v })} />
         <Button label={id ? 'Guardar cambios' : 'Crear espacio'} onPress={save} loading={busy} disabled={!f.name.trim() || !(Number(f.maxCapacity) > 0)} />
       </Card>

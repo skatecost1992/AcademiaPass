@@ -3,10 +3,9 @@ import { router } from 'expo-router';
 import Constants from 'expo-constants';
 import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Button, Card, Field, Gap, Muted, Screen, Section, colors, errorText } from '../components/ui';
+import { Button, Card, Field, Gap, Muted, Screen, Section, colors, errorText, notify } from '../components/ui';
 import { type ServerMode, checkServer, getApiUrl, getServerMode, isWebSameOrigin, loginAt, normalizeUrl, presetUrl, setServer } from '../lib/api';
 import { useSession } from '../session';
-import type { Profile } from '../types';
 
 const OPTIONS: { mode: Exclude<ServerMode, 'custom'>; title: string; icon: React.ComponentProps<typeof Ionicons>['name']; desc: string; dbKey: string }[] = [
   { mode: 'cloud', title: 'Nube · PostgreSQL en Neon', icon: 'cloud-outline', dbKey: 'cloudDatabase', desc: 'Los mismos datos en todos los teléfonos y en la web.' },
@@ -44,7 +43,7 @@ function useDatabaseInfo() {
 /**
  * Seleccion del servidor (nube, local u otra direccion). Solo un administrador puede cambiarlo: el usuario y la
  * clave se validan contra la tabla de usuarios de la base del servidor elegido (no se guarda ninguna clave en el
- * telefono). Al confirmar, la app queda conectada a ese servidor con la sesion de ese administrador.
+ * telefono). Al confirmar solo cambia el servidor (RQ59): la sesion se cierra y cada persona ingresa con su usuario.
  */
 export default function Server() {
   if (isWebSameOrigin()) {
@@ -61,7 +60,7 @@ export default function Server() {
 }
 
 function ServerOptions() {
-  const { user, signIn } = useSession();
+  const { user, signOut } = useSession();
   const [mode, setMode] = useState<ServerMode>(getServerMode());
   const dbs = useDatabaseInfo();
   const [custom, setCustom] = useState(getServerMode() === 'custom' ? getApiUrl() : '');
@@ -82,10 +81,11 @@ function ServerOptions() {
       const r = await loginAt(url, username, password);
       if (r.user.role !== 'admin') throw new Error('Solo un usuario administrador puede cambiar la conexión.');
       await setServer(mode, url);
-      await signIn(r.token, r.user as Profile);
+      // RQ59: solo se cambia el servidor (y su base de datos); no se abre sesion con el admin que autorizo.
+      // setServer borra el token; signOut deja la app en la pantalla de ingreso del servidor nuevo
       setPassword('');
-      if (router.canDismiss()) router.dismissAll();
-      router.replace(r.user.consentRequired ? '/consent' : '/home');
+      notify('Servidor cambiado', `La app ahora usa ${dbs[mode]?.text || url}. Inicia sesión con tu usuario de ese servidor.`);
+      await signOut();
     } catch (e) {
       setError(`${url}\n${errorText(e)}`);
     } finally {
@@ -140,13 +140,13 @@ function ServerOptions() {
           <Field label="Usuario" value={username} onChangeText={setUsername} autoCapitalize="none" testID="config-user" />
           <Field label="Clave" value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" testID="config-pass" onSubmitEditing={save} />
           {error ? <Text style={{ color: colors.danger, marginBottom: 10 }}>{error}</Text> : null}
-          <Button label="Validar y usar este servidor" icon="checkmark" onPress={save} loading={busy} disabled={!username.trim() || !password} testID="server-save" />
+          <Button label="Autorizar y cambiar de servidor" icon="checkmark" onPress={save} loading={busy} disabled={!username.trim() || !password} testID="server-save" />
         </Card>
       </Section>
 
       <Section title="Importante">
         <Card>
-          <Muted>• Cada servidor tiene su propia base de datos y sus propios usuarios. Al cambiar, la app queda con la sesión del administrador validado.</Muted>
+          <Muted>• Cada servidor tiene su propia base de datos y sus propios usuarios. El administrador solo autoriza el cambio: después cada persona inicia sesión con su usuario de ese servidor.</Muted>
           <Muted>• El usuario inicial es admin (clave inicial Bogota.2027). Cámbiala en Mi perfil → Contraseña: queda guardada en la base de ese servidor.</Muted>
           <Muted>• Local: en el PC ejecuta iniciar-local-sqlserver.ps1 dentro de backend.</Muted>
           <Muted>• Nube gratuita: si estuvo inactiva, la primera conexión tarda hasta 1 minuto.</Muted>

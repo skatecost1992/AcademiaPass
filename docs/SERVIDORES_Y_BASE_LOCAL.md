@@ -30,7 +30,8 @@ Si cambias estos valores debes **recompilar el APK** (`build-apk.ps1`). La app s
    La app comprueba `/api/health` y luego valida el usuario contra la **tabla `users` de la base de ese
    servidor** (PostgreSQL en la nube o SQL Server local). Solo se acepta un usuario con rol `admin`. En el
    teléfono no se guarda ninguna clave.
-4. Si es correcto, la app queda conectada a ese servidor con la sesión de ese administrador.
+4. Si es correcto, la app **solo cambia de servidor** (y de base de datos): no abre sesión con el administrador.
+   Vuelve a la pantalla de ingreso para que cada persona entre con su usuario de ese servidor (RQ59).
 
 ### Usuario `admin` en la base
 

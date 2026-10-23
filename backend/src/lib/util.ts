@@ -104,5 +104,7 @@ export function range(q: { from?: string; to?: string }) {
   const to = q.to ?? todayLocal();
   const from = q.from ?? addDays(to, -90);
   if (from > to) throw new HttpError(400, 'La fecha inicial es mayor que la final');
+  // RQ50: maximo un ano de registros por consulta
+  if ((Date.parse(to) - Date.parse(from)) / 86400_000 > 366) throw new HttpError(400, 'El rango máximo de consulta es de un año', 'RANGE_TOO_LONG');
   return { from, to };
 }

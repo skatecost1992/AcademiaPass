@@ -289,6 +289,20 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'capacity_requests_pendin
 IF COL_LENGTH(N'dbo.spaces', N'opening_hours') IS NULL
   ALTER TABLE dbo.spaces ADD opening_hours NVARCHAR(MAX) NULL;
 
+-- RQ47: hasta cuantos meses adelante se puede reservar
+IF COL_LENGTH(N'dbo.tenants', N'booking_horizon_months') IS NULL
+  ALTER TABLE dbo.tenants ADD booking_horizon_months INT NOT NULL CONSTRAINT df_tenants_horizon DEFAULT 3;
+
+-- RQ52: cupo reservado y no tomado: al terminar la clase se descuenta del plan (una sola vez)
+IF COL_LENGTH(N'dbo.bookings', N'cancelled_by') IS NULL
+  ALTER TABLE dbo.bookings ADD cancelled_by INT NULL REFERENCES dbo.users(id);
+IF COL_LENGTH(N'dbo.bookings', N'cancelled_at') IS NULL
+  ALTER TABLE dbo.bookings ADD cancelled_at DATETIMEOFFSET NULL;
+IF COL_LENGTH(N'dbo.class_reservations', N'settled_at') IS NULL
+  ALTER TABLE dbo.class_reservations ADD settled_at DATETIMEOFFSET NULL;
+IF COL_LENGTH(N'dbo.class_reservations', N'penalty_membership_id') IS NULL
+  ALTER TABLE dbo.class_reservations ADD penalty_membership_id INT NULL REFERENCES dbo.memberships(id);
+
 DECLARE @tablas INT = (SELECT COUNT(*) FROM sys.tables WHERE name IN
   (N'tenants', N'persons', N'academies', N'sites', N'users', N'spaces', N'photos', N'teachers', N'classes', N'bookings',
    N'plans', N'plan_academies', N'plan_sites', N'client_academies', N'memberships', N'payments', N'attendances',

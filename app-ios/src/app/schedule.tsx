@@ -12,7 +12,10 @@ export default function Schedule() {
   const [academyId, setAcademyId] = useState<number | null>(null);
   const [days, setDays] = useState(7);
   const from = today();
-  const list = useLoad<Booking[]>(`/bookings${qs({ from, to: addDays(from, days - 1), kind: 'class', academyId })}`);
+  // RQ47: se puede ver (y reservar) hasta el limite de meses que define la academia; la API consulta max. 1 ano
+  const settings = useLoad<{ bookingHorizonMonths: number }>('/settings');
+  const horizonDays = Math.min(365, (settings.data?.bookingHorizonMonths ?? 3) * 30);
+  const list = useLoad<Booking[]>(`/bookings${qs({ from, to: addDays(from, (days === 0 ? horizonDays : days) - 1), kind: 'class', academyId })}`);
   // Reserva o cancela el cupo (RQ30-RQ32: el servidor valida plan, cupo y limite de cancelacion)
   const toggle = async (b: Booking) => {
     const mine = b.my_reservation_id;
@@ -38,7 +41,7 @@ Cupos reservados: ${b.reserved}/${b.group_size}`;
       {user && user.academies.length > 1 ? (
         <Chips<number | null> label="Academia" options={[{ value: null, label: 'Todas' }, ...user.academies.map((a) => ({ value: a.id as number | null, label: a.name }))]} value={academyId} onChange={setAcademyId} />
       ) : null}
-      <Chips label="Mostrar" options={[{ value: 1, label: 'Hoy' }, { value: 7, label: '7 días' }, { value: 30, label: '30 días' }]} value={days} onChange={setDays} />
+      <Chips label="Mostrar" options={[{ value: 1, label: 'Hoy' }, { value: 7, label: '7 días' }, { value: 30, label: '30 días' }, { value: 0, label: `Hasta ${settings.data?.bookingHorizonMonths ?? 3} meses` }]} value={days} onChange={setDays} />
       <Muted style={{ marginBottom: 8 }}>Toca una clase para reservar o cancelar tu cupo. Necesitas un plan vigente de esa academia y sede.</Muted>
       <Loader state={list}>{(b) => <BookingList bookings={b} onPress={toggle} />}</Loader>
     </Screen>

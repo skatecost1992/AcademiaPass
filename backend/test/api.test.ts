@@ -12,6 +12,7 @@ const { createApp } = await import('../src/app.ts');
 const { openDb } = await import('../src/db.ts');
 const { ensureAdmin } = await import('../src/bootstrap.ts');
 const { describePg } = await import('../src/db.ts');
+const { settleMissedReservations } = await import('../src/lib/scheduling.ts');
 
 let base = '';
 let close = () => {};
@@ -397,6 +398,70 @@ describe('AcademiaPass API', () => {
     assert.ok(all.totals.taken >= 1 && all.totals.reserved >= 1);
     const portero = (await ok('POST', '/auth/login', { username: 'portero', password: 'Clave.12345' })).token;
     assert.equal((await call('GET', `/reports/classes?${range}`, undefined, portero)).status, 403);
+  });
+
+  it('franjas libres, reglas por permiso, aforo consistente, horizonte, Mis reservas, reportes e inasistencias (RQ42-RQ52)', async () => {
+    const tomorrow = (h: number, m = 0) => new Date(new Date(todayAt(h, m)).getTime() + 24 * 3600_000);
+    const localDay = (d: Date) => new Date(d.getTime() - 5 * 3600_000).toISOString().slice(0, 10);
+
+    // RQ42: espacio ocupado -> sugiere las franjas libres del dia
+    await ok('POST', '/bookings', { spaceId: s.salon.id, kind: 'class', classId: s.salsa.id, startsAt: tomorrow(12).toISOString(), endsAt: tomorrow(13).toISOString() }, s.admin);
+    const taken = await call('POST', '/bookings', { spaceId: s.salon.id, kind: 'rental', title: 'Choque', startsAt: tomorrow(12, 30).toISOString(), endsAt: tomorrow(13, 30).toISOString() }, s.admin);
+    assert.equal(taken.body.code, 'SPACE_TAKEN');
+    assert.ok(taken.body.error.includes('Horarios disponibles ese día'));
+    assert.ok(taken.body.available.some((x: string) => x.endsWith('-12:00')) && taken.body.available.some((x: string) => x.startsWith('13:00')));
+    const av = await ok('GET', `/spaces/${s.salon.id}/availability?date=${localDay(tomorrow(12))}`, undefined, s.admin);
+    assert.deepEqual(av.available, taken.body.available);
+
+    // RQ44: las reglas las configura quien tenga el permiso, no solo el admin
+    await ok('POST', '/users', { username: 'reglas', password: 'Clave.12345', fullName: 'Reglas', document: '8008', permissions: ['booking_rules'] }, s.admin);
+    const rules = (await ok('POST', '/auth/login', { username: 'reglas', password: 'Clave.12345' })).token;
+    await ok('PUT', '/settings', { bookingHorizonMonths: 1 }, rules);
+    const portero = (await ok('POST', '/auth/login', { username: 'portero', password: 'Clave.12345' })).token;
+    assert.equal((await call('PUT', '/settings', { bookingHorizonMonths: 6 }, portero)).status, 403);
+
+    // RQ47: no se agenda mas alla del horizonte (1 mes)
+    const far = new Date(tomorrow(10).getTime() + 40 * 86400_000);
+    const beyond = await call('POST', '/bookings', { spaceId: s.salon.id, kind: 'class', classId: s.salsa.id, startsAt: far.toISOString(), endsAt: new Date(far.getTime() + 3600_000).toISOString() }, s.admin);
+    assert.equal(beyond.body.code, 'BEYOND_HORIZON');
+    await ok('PUT', '/settings', { bookingHorizonMonths: 3 }, rules);
+
+    // RQ46: con varios grupos, grupos x integrantes = aforo
+    const bad = await call('POST', '/spaces', { siteId: s.siteA1.id, name: 'Patio', maxCapacity: 30, allowMultiGroup: true, maxGroups: 2, capacityPerGroup: 10 }, s.admin);
+    assert.equal(bad.status, 400);
+    await ok('POST', '/spaces', { siteId: s.siteA1.id, name: 'Patio', maxCapacity: 30, allowMultiGroup: true, maxGroups: 3, capacityPerGroup: 10 }, s.admin);
+
+    // RQ52: reservo, no asisto, la clase termina -> se descuenta del plan y ya no se puede cancelar
+    const now = Date.now();
+    const [past] = await ok('POST', '/bookings', { spaceId: s.salon.id, kind: 'class', classId: s.salsa.id, startsAt: new Date(now - 3 * 3600_000).toISOString(), endsAt: new Date(now - 2 * 3600_000).toISOString() }, s.admin);
+    const [{ tenant_id }] = await database.query(`SELECT tenant_id FROM bookings WHERE id = $1`, [past.id]);
+    const [cr] = await database.query(`INSERT INTO class_reservations (tenant_id, booking_id, client_id) VALUES ($1, $2, $3) RETURNING id`, [tenant_id, past.id, s.clientId]);
+    const before = (await ok('GET', `/clients/${s.clientId}`, undefined, s.admin)).memberships.find((m: any) => m.plan_name === '8 clases Norte');
+    const settled = await settleMissedReservations(database);
+    assert.ok(settled.charged >= 1);
+    assert.equal((await settleMissedReservations(database)).charged, 0, 'no descuenta dos veces');
+    const after = (await ok('GET', `/clients/${s.clientId}`, undefined, s.admin)).memberships.find((m: any) => m.plan_name === '8 clases Norte');
+    assert.equal(after.units_used, before.units_used + 1);
+    assert.equal((await call('POST', `/me/class-reservations/${cr.id}/cancel`, {}, s.client)).body.code, 'EXPIRED');
+
+    // RQ48, RQ49: Mis reservas de la mas reciente a la mas antigua, con estado; maximo 20 sin rango; rango de un ano
+    const mine = await ok('GET', '/me/reservations', undefined, s.client);
+    assert.ok(mine.rows.length <= 20);
+    const times = mine.rows.map((r: any) => new Date(r.starts_at).getTime());
+    assert.deepEqual(times, [...times].sort((a: number, b: number) => b - a));
+    assert.equal(mine.rows.find((r: any) => r.type === 'class' && r.booking_id === past.id).state, 'missed');
+    assert.ok(mine.rows.some((r: any) => r.state === 'cancelled'));
+    assert.equal((await call('GET', '/me/reservations?from=2025-01-01&to=2026-12-31', undefined, s.client)).body.code, 'RANGE_TOO_LONG');
+
+    // RQ50: los reportes del administrador tambien se limitan a un ano
+    assert.equal((await call('GET', '/reports/attendance?from=2025-01-01&to=2026-12-31', undefined, s.admin)).body.code, 'RANGE_TOO_LONG');
+
+    // RQ45: el reporte de clases trae el profesor; RQ51: clientes con mas planes y asistencias
+    const cls = await ok('GET', `/reports/classes?from=${localDay(new Date(now - 86400_000))}&to=${localDay(tomorrow(12))}`, undefined, s.admin);
+    assert.ok(cls.rows.some((r: any) => r.teacher_name === 'Pedro Interno' && r.state === 'missed'));
+    const top = await ok('GET', '/reports/top-clients', undefined, s.admin);
+    assert.equal(top.byPlans[0].full_name, 'Carlos Cliente');
+    assert.ok(top.byAttendance.length >= 2 && top.byAttendance[0].visits >= top.byAttendance[1].visits);
   });
 
   it('el cliente reserva un espacio y ve las reservas ajenas sin datos personales', async () => {

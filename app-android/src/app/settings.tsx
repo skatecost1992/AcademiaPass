@@ -6,6 +6,7 @@ import { get, put } from '../lib/api';
 
 interface Settings {
   cancelHours: number;
+  bookingHorizonMonths: number;
   academies: { id: number; name: string; cancelHours: number | null }[];
   sites: { id: number; name: string; academyId: number; academyName: string; cancelHours: number | null }[];
 }
@@ -55,6 +56,7 @@ export default function SettingsScreen() {
     try {
       await put('/settings', {
         cancelHours: s.cancelHours,
+        bookingHorizonMonths: s.bookingHorizonMonths,
         academies: s.academies.map((a) => ({ id: a.id, cancelHours: a.cancelHours })),
         sites: s.sites.map((x) => ({ id: x.id, cancelHours: x.cancelHours })),
       });
@@ -76,6 +78,14 @@ export default function SettingsScreen() {
         Hasta cuándo puede un cliente cancelar su cupo en una clase o su reserva de espacio. Después de ese límite
         solo el personal puede cancelar. La regla de la sede manda sobre la de la academia, y esta sobre la general.
       </Muted>
+
+      <Section title="Hasta cuándo se puede reservar">
+        <Card>
+          <Muted style={{ marginBottom: 8 }}>Límite superior para reservar o agendar, contado desde hoy.</Muted>
+          <Chips options={[1, 2, 3, 6, 12].map((m) => ({ value: m, label: m === 1 ? '1 mes' : `${m} meses` }))}
+            value={s.bookingHorizonMonths} onChange={(v) => setS({ ...s, bookingHorizonMonths: v })} />
+        </Card>
+      </Section>
 
       <Section title="Regla general de la organización">
         <Card>

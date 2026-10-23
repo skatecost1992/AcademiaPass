@@ -1,7 +1,7 @@
 export type Role = 'admin' | 'staff' | 'client';
 export type Permission =
   | 'attendance' | 'schedules' | 'classes' | 'bookings' | 'clients' | 'plans' | 'payments'
-  | 'reports' | 'capacity_reports' | 'override_capacity';
+  | 'reports' | 'capacity_reports' | 'override_capacity' | 'booking_rules';
 
 export interface Profile {
   id: number;

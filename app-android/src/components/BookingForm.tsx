@@ -9,8 +9,9 @@ import { router } from 'expo-router';
 import React, { useState } from 'react';
 import { Text, View } from 'react-native';
 import { post, qs } from '../lib/api';
-import { DAYS, addDays, fmtTime, isDate, isTime, toIso, today } from '../lib/format';
+import { DAYS, addDays, fmtTime, isDate, isTime, toIso, today, ymd } from '../lib/format';
 import type { Booking, ClassDef, ClientRow, Site, Space, Teacher } from '../types';
+import { Calendar } from './Calendar';
 import { PhotoGallery } from './PhotoGallery';
 import { PlacePicker } from './shared';
 import { Badge, Button, Card, Chips, Field, Gap, InfoRow, Muted, RowWrap, Section, colors, errorText, notify, useLoad } from './ui';
@@ -39,11 +40,15 @@ function SpaceInfo({ space, site }: { space: Space; site?: Site }) {
 
 function DayAgenda({ spaceId, date }: { spaceId: number; date: string }) {
   const list = useLoad<Booking[]>(isDate(date) ? `/bookings${qs({ spaceId, from: date, to: date })}` : null);
+  const free = useLoad<{ available: string[] }>(isDate(date) ? `/spaces/${spaceId}/availability${qs({ date })}` : null);
   const items = list.data ?? [];
   return (
     <Card>
       <Text style={{ fontWeight: '700', color: colors.text, marginBottom: 4 }}>Ocupación del espacio ese día</Text>
-      {items.length === 0 ? <Muted>Libre todo el día.</Muted> : items.map((b) => (
+      <Muted style={{ fontSize: 12, marginBottom: 4, color: colors.success }}>
+        Horarios disponibles: {free.data ? (free.data.available.length ? free.data.available.join(' · ') : 'ninguno ese día') : '…'}
+      </Muted>
+      {items.length === 0 ? <Muted>Sin clases ni reservas ese día.</Muted> : items.map((b) => (
         <InfoRow key={b.id} label={`${fmtTime(b.starts_at)}–${fmtTime(b.ends_at)}`} value={`${b.title} · ${b.group_size} pers.`} />
       ))}
     </Card>
@@ -63,6 +68,12 @@ export function BookingForm({ mode, initialKind = 'class' }: { mode: 'client' | 
   const [f, setF] = useState({ date: addDays(today(), 1), start: '08:00', end: '09:00', groupSize: '', title: '', notes: '', repeatWeeks: '1' });
   const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f) => (v: string) => setF((x) => ({ ...x, [k]: v }));
+  const settings = useLoad<{ bookingHorizonMonths: number }>('/settings');
+  const maxDate = (() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + (settings.data?.bookingHorizonMonths ?? 3));
+    return ymd(d);
+  })();
 
   const sites = useLoad<Site[]>(academyId ? `/sites${qs({ academyId })}` : null);
   const spaces = useLoad<Space[]>(siteId ? `/spaces${qs({ siteId })}` : null);
@@ -143,14 +154,9 @@ export function BookingForm({ mode, initialKind = 'class' }: { mode: 'client' | 
       ) : null}
 
       <Section title="Fecha y hora">
-        <RowWrap>
-          {[0, 1, 2, 3].map((n) => {
-            const d = addDays(today(), n);
-            return <Button key={d} small variant={f.date === d ? 'primary' : 'secondary'} label={n === 0 ? 'Hoy' : n === 1 ? 'Mañana' : `${DAYS[new Date(`${d}T12:00:00`).getDay()]} ${d.slice(8)}`} onPress={() => set('date')(d)} />;
-          })}
-        </RowWrap>
-        <Gap h={8} />
-        <Field label="Fecha (AAAA-MM-DD)" value={f.date} onChangeText={set('date')} />
+        {/* RQ47: calendario hasta el limite de meses que define la academia */}
+        <Calendar value={f.date} onChange={set('date')} min={today()} max={maxDate} />
+        <Muted style={{ fontSize: 12, marginBottom: 8 }}>Fecha elegida: {f.date} · se puede reservar hasta el {maxDate}.</Muted>
         <View style={{ flexDirection: 'row', gap: 10 }}>
           <View style={{ flex: 1 }}><Field label="Desde (HH:MM)" value={f.start} onChangeText={set('start')} /></View>
           <View style={{ flex: 1 }}><Field label="Hasta (HH:MM)" value={f.end} onChangeText={set('end')} /></View>

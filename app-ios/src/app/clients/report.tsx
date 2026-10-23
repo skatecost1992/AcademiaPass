@@ -8,7 +8,7 @@ import type { UnifiedReport } from '../../types';
 /** Reporte unificado de un cliente consultado por el administrador (RQ9, RQ15) */
 export default function ClientReport() {
   const { clientId } = useLocalSearchParams<{ clientId: string }>();
-  const range = useRange(90);
+  const range = useRange('month');
   const report = useLoad<UnifiedReport>(`/reports/clients/${clientId}/unified${qs({ from: range.from, to: range.to })}`);
   return (
     <Screen title="Reporte unificado" onRefresh={report.reload} refreshing={report.loading}>

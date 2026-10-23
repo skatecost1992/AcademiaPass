@@ -3,31 +3,53 @@
  */
 import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { addDays, fmtDate, fmtDateTime, fmtPeriod, planKindLabel, today, unitsText } from '../lib/format';
+import { fmtDate, fmtDateTime, fmtPeriod, planKindLabel, today, unitsText, ymd } from '../lib/format';
 import { sharePdf } from '../lib/pdf';
 import { unifiedReportHtml } from '../lib/report';
 import type { UnifiedReport } from '../types';
 import { Badge, Button, Card, Chips, Empty, InfoRow, Kpi, KpiRow, Muted, Section, colors, errorText, notify } from './ui';
 
 export type GroupBy = 'week' | 'month';
-const PRESETS = [
-  { value: 30, label: '30 días' },
-  { value: 90, label: '3 meses' },
-  { value: 180, label: '6 meses' },
-  { value: 365, label: '1 año' },
-];
+const MONTH_NAMES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 
-export function useRange(initial = 90) {
-  const [days, setDays] = useState(initial);
-  const [groupBy, setGroupBy] = useState<GroupBy>('week');
-  const to = today();
-  return { days, setDays, groupBy, setGroupBy, from: addDays(to, -days + 1), to };
+/**
+ * Periodo de los reportes (RQ50): un mes o un ano calendario, nunca mas de un ano. `offset` mueve el periodo
+ * hacia atras (-1 = mes o ano anterior).
+ */
+export function useRange(initialMode: 'month' | 'year' = 'month') {
+  const [mode, setMode] = useState<'month' | 'year'>(initialMode);
+  const [offset, setOffset] = useState(0);
+  const [groupBy, setGroupBy] = useState<GroupBy>(initialMode === 'year' ? 'month' : 'week');
+  const now = new Date();
+  let from: string;
+  let to: string;
+  let label: string;
+  if (mode === 'month') {
+    const first = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    from = ymd(first);
+    to = ymd(new Date(first.getFullYear(), first.getMonth() + 1, 0));
+    label = `${MONTH_NAMES[first.getMonth()]} ${first.getFullYear()}`;
+  } else {
+    const y = now.getFullYear() + offset;
+    from = `${y}-01-01`;
+    to = `${y}-12-31`;
+    label = String(y);
+  }
+  // Los periodos futuros no tienen registros: se recortan a hoy
+  if (to > today() && offset === 0) to = today();
+  const changeMode = (m: 'month' | 'year') => { setMode(m); setOffset(0); setGroupBy(m === 'year' ? 'month' : 'week'); };
+  return { mode, setMode: changeMode, offset, setOffset, groupBy, setGroupBy, from, to, label };
 }
 
 export function RangePicker({ range, showGroup = true }: { range: ReturnType<typeof useRange>; showGroup?: boolean }) {
   return (
     <View>
-      <Chips label="Periodo" options={PRESETS} value={range.days} onChange={range.setDays} />
+      <Chips label="Consultar por" options={[{ value: 'month' as const, label: 'Mes' }, { value: 'year' as const, label: 'Año' }]} value={range.mode} onChange={range.setMode} />
+      <View style={s.period}>
+        <Button small variant="secondary" icon="chevron-back" label="" onPress={() => range.setOffset(range.offset - 1)} />
+        <Text style={s.periodLabel}>{range.label}</Text>
+        <Button small variant="secondary" icon="chevron-forward" label="" onPress={() => range.setOffset(Math.min(0, range.offset + 1))} disabled={range.offset >= 0} />
+      </View>
       {showGroup ? (
         <Chips<GroupBy> label="Agrupar por" options={[{ value: 'week', label: 'Semana' }, { value: 'month', label: 'Mes' }]} value={range.groupBy} onChange={range.setGroupBy} />
       ) : null}
@@ -61,7 +83,7 @@ export interface ClassesReport {
   byClass: { title: string; reserved: number; taken: number; missed: number }[];
   rows: {
     reservation_id: number | null; client_id: number; client_name: string; booking_id: number; title: string; starts_at: string;
-    site_name: string; academy_name: string; attended_at: string | null; reserved: boolean; state: 'taken' | 'missed' | 'reserved' | 'cancelled';
+    site_name: string; academy_name: string; teacher_name: string | null; attended_at: string | null; reserved: boolean; state: 'taken' | 'missed' | 'reserved' | 'cancelled';
   }[];
 }
 
@@ -93,7 +115,7 @@ export function ClassesReportView({ report, showClient }: { report: ClassesRepor
                   <Badge text={CLASS_STATE[r.state][0]} tone={CLASS_STATE[r.state][1]} />
                 </View>
                 <Muted style={{ fontSize: 12 }}>
-                  {showClient ? `${r.client_name} · ` : ''}{r.academy_name} · {r.site_name}{r.reserved ? '' : ' · sin reserva previa'}
+                  {showClient ? `${r.client_name} · ` : ''}{r.teacher_name ? `Prof. ${r.teacher_name} · ` : ''}{r.academy_name} · {r.site_name}{r.reserved ? ' · con reserva' : ' · sin reserva previa'}
                 </Muted>
               </View>
             ))}
@@ -177,6 +199,8 @@ export function UnifiedReportView({ report, groupBy }: { report: UnifiedReport; 
 }
 
 const s = StyleSheet.create({
+  period: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
+  periodLabel: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '800', color: colors.text, textTransform: 'capitalize' },
   barLabel: { flex: 1, color: colors.text, fontSize: 13, fontWeight: '600' },
   barValue: { color: colors.muted, fontSize: 13 },
   track: { height: 8, backgroundColor: '#E5ECEA', borderRadius: 4, marginTop: 4, overflow: 'hidden' },

@@ -135,6 +135,17 @@ Todos los reportes aceptan `from`, `to` (AAAA-MM-DD), `academyId`, `siteId` y `g
 | 39 Validar ingreso el mismo día desde 1 h antes hasta el final | `performScan`: `ENTRY_WINDOW_MS` = 1 h, mismo día local; si no → `OUT_OF_TIME` con la franja válida |
 | 40 Reservar solo en la disponibilidad del espacio | `spaces.opening_hours` (NULL = el de la sede), debe caber en el de la sede (`SPACE_HOURS`); se valida al agendar |
 | 41 Reporte de clases reservadas y tomadas | `GET /reports/classes`: personal con `reports` ve todo; el cliente solo lo suyo (pestaña *Clases* y *Mi reporte*) |
+| 42 Espacio ocupado: indicar horarios disponibles | `freeSlots` (`lib/scheduling.ts`), `GET /spaces/:id/availability`; el error `SPACE_TAKEN` trae `available` |
+| 43 Reserva de espacio con fecha/desde/hasta; clases con horario ya definido; sin cruces | Formulario de reserva; cupos solo sobre sesiones programadas; `assertSpaceAvailable` + `assertNoOverlap`; permisos `classes` y `bookings` |
+| 44 Reglas de cancelación por menú con permiso asignable | Permiso `booking_rules`; `PUT /settings` lo exige; menú *Reglas de reserva* |
+| 45 Reporte con clase, profesor, reserva y clases agendadas no tomadas | `/reports/classes`: `teacher_name`, `reserved`, estado `missed` |
+| 46 Aforo consistente | Espacio multigrupo: grupos × integrantes = aforo (validación en `spaceBody`); grupo ≤ cupo por grupo y ≤ aforo |
+| 47 Calendario y límite de meses para reservar | `tenants.booking_horizon_months`, `assertWithinHorizon` (`BEYOND_HORIZON`); componente `Calendar` |
+| 48 Mis reservas ordenadas de la más reciente | `GET /me/reservations` ordena por `starts_at` descendente |
+| 49 Estados y consulta por rango | Estados asistida/cancelada/eliminada/no asistió/pendiente; 20 más recientes; rango desde/hasta ≤ 1 año |
+| 50 Reportes por mes y por año (máx. 1 año) | `range()` rechaza > 366 días (`RANGE_TOO_LONG`); `RangePicker` Mes/Año |
+| 51 Clientes con más planes y asistencias | `GET /reports/top-clients`, pestaña *Top clientes* |
+| 52 No cancelar tomadas/vencidas; inasistencia descuenta del plan | `ALREADY_TAKEN`/`EXPIRED`; `settleMissedReservations` cada 5 min (`class_reservations.settled_at`, `penalty_membership_id`) |
 | 38 No reservar en dos lugares a la vez | `assertNoOverlap`: cupos en clases y espacios del cliente que se crucen → `OVERLAP` |
 | 35 Cancelación por academia y sede | `academies.cancel_hours`, `sites.cancel_hours` (NULL = hereda); `siteCancelHours`: sede → academia → organización |
 

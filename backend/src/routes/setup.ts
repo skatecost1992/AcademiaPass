@@ -10,7 +10,8 @@ import { z } from 'zod';
 import { HttpError, requireAdmin, requirePerm } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { deleteAcademy, deleteSites, deleteSpaces } from '../lib/cleanup.ts';
-import { id, idList, joinCode, optId, optText, own, parse, text, timeStr } from '../lib/util.ts';
+import { freeSlots } from '../lib/scheduling.ts';
+import { dateStr, id, idList, joinCode, optId, optText, own, parse, text, timeStr } from '../lib/util.ts';
 
 /** Academias visibles para el usuario: todas las de su organizacion o, si es cliente, las suyas */
 export async function visibleAcademyIds(db: Db, req: Request): Promise<number[]> {
@@ -32,7 +33,12 @@ const spaceBody = z.object({
   capacityPerGroup: z.coerce.number().int().positive().optional().nullable(),
   active: z.boolean().default(true),
   openingHours: openingHours.nullable().optional(), // RQ40: null = usa el horario de la sede
-}).refine((s) => !s.allowMultiGroup || (s.capacityPerGroup ?? 0) <= s.maxCapacity, { message: 'El cupo por grupo no puede superar el aforo', path: ['capacityPerGroup'] });
+}).refine((s) => !s.allowMultiGroup || (s.capacityPerGroup ?? 0) <= s.maxCapacity, { message: 'El cupo por grupo no puede superar el aforo', path: ['capacityPerGroup'] })
+  // RQ46: con varios grupos, grupos x integrantes debe sumar exactamente el aforo del espacio
+  .refine((s) => !s.allowMultiGroup || (!!s.capacityPerGroup && s.maxGroups * s.capacityPerGroup === s.maxCapacity), {
+    message: 'Con varios grupos, el número de grupos por los integrantes de cada grupo debe sumar exactamente el aforo del espacio',
+    path: ['capacityPerGroup'],
+  });
 
 // Una foto ya comprimida en el telefono (~1600 px, JPEG 0.8) pesa 200-600 KB; el limite deja margen
 const MAX_PHOTO_BYTES = 2_500_000;
@@ -160,6 +166,13 @@ export function setupRoutes(db: Db) {
     );
     return row;
   };
+
+  // RQ42: franjas libres de un espacio en una fecha
+  r.get('/spaces/:id/availability', async (req, res) => {
+    const sp = await own(db, 'spaces', parse(id, req.params.id), req.user.tenantId, 'Espacio');
+    const date = parse(dateStr, req.query.date);
+    res.json({ date, available: await freeSlots(db, sp.id, date) });
+  });
 
   r.post('/spaces', settings, async (req, res) => {
     res.status(201).json(await saveSpace(req));

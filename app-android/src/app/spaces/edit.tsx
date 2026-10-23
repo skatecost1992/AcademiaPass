@@ -79,7 +79,8 @@ export default function SpaceEdit() {
         {f.allowMultiGroup ? (
           <>
             <Field label="Máximo de grupos simultáneos" value={f.maxGroups} onChangeText={(v) => setF({ ...f, maxGroups: v })} keyboardType="number-pad" />
-            <Field label="Asistentes por grupo" value={f.capacityPerGroup} onChangeText={(v) => setF({ ...f, capacityPerGroup: v })} keyboardType="number-pad" hint="Vacío = sin límite por grupo (solo el aforo total)." />
+            <Field label="Asistentes por grupo" value={f.capacityPerGroup} onChangeText={(v) => setF({ ...f, capacityPerGroup: v })} keyboardType="number-pad"
+              hint={`Grupos × asistentes debe sumar exactamente el aforo (${f.maxCapacity}). Ahora suma ${(Number(f.maxGroups) || 0) * (Number(f.capacityPerGroup) || 0)}.`} />
           </>
         ) : <Muted style={{ marginBottom: 10 }}>Si ya está reservado en un horario, no se podrá reservar de nuevo en ese horario.</Muted>}
         <Toggle label="Horario de disponibilidad propio" value={ownHours} onChange={setOwnHours}

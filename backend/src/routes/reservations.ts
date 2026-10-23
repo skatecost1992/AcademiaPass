@@ -7,10 +7,11 @@
  */
 import { Router, type Request } from 'express';
 import { z } from 'zod';
-import { HttpError, requireAdmin } from '../auth.ts';
+import { HttpError, requirePerm } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { KINDS_FOR_CONTEXT, membershipsOf, pickMembership } from '../lib/memberships.ts';
-import { id, idList, localParts, parse } from '../lib/util.ts';
+import { assertWithinHorizon } from '../lib/scheduling.ts';
+import { dateStr, dayBounds, id, idList, localParts, parse, range } from '../lib/util.ts';
 import { visibleAcademyIds } from './setup.ts';
 
 export async function cancelHours(db: Db, tenantId: number): Promise<number> {
@@ -80,12 +81,61 @@ const RESERVATION_SELECT = `
     JOIN bookings b ON b.id = cr.booking_id JOIN sites s ON s.id = b.site_id JOIN spaces sp ON sp.id = b.space_id
     JOIN academies a ON a.id = s.academy_id LEFT JOIN teachers t ON t.id = b.teacher_id`;
 
+type ReservationState = 'attended' | 'cancelled' | 'deleted' | 'missed' | 'pending';
+
 export function reservationRoutes(db: Db) {
   const r = Router();
+
+  // RQ48, RQ49: todas las reservas del cliente (cupos en clases y espacios) con su estado, de la mas reciente a la
+  // mas antigua; sin rango solo las 20 mas recientes, con rango desde/hasta (maximo un ano) todas las del rango
+  r.get('/me/reservations', async (req, res) => {
+    if (req.user.role !== 'client') throw new HttpError(400, 'Solo para clientes');
+    const q = parse(z.object({ from: dateStr.optional(), to: dateStr.optional() }), req.query);
+    const hasRange = !!(q.from || q.to);
+    const { from, to } = hasRange ? range(q) : { from: '1900-01-01', to: '2999-12-31' };
+    const [start, end] = dayBounds(from, to);
+    const me = req.user.id;
+    const classes = await db.query(
+      `SELECT cr.id, 'class' AS type, cr.status AS my_status, cr.created_at, cr.cancelled_at, cr.penalty_membership_id,
+              b.id AS booking_id, b.title, b.starts_at, b.ends_at, b.status AS booking_status,
+              s.name AS site_name, sp.name AS space_name, a.name AS academy_name, t.full_name AS teacher_name,
+              (SELECT count(*) FROM attendances att WHERE att.booking_id = b.id AND att.client_id = $1) AS attended
+         FROM class_reservations cr JOIN bookings b ON b.id = cr.booking_id JOIN sites s ON s.id = b.site_id
+         JOIN spaces sp ON sp.id = b.space_id JOIN academies a ON a.id = s.academy_id LEFT JOIN teachers t ON t.id = b.teacher_id
+        WHERE cr.client_id = $1 AND b.starts_at >= $2 AND b.starts_at < $3`,
+      [me, start, end],
+    );
+    const rentals = await db.query(
+      `SELECT b.id, 'rental' AS type, b.status AS booking_status, b.created_at, b.cancelled_at, b.cancelled_by,
+              b.id AS booking_id, b.title, b.starts_at, b.ends_at, s.name AS site_name, sp.name AS space_name, a.name AS academy_name,
+              (SELECT count(*) FROM attendances att WHERE att.booking_id = b.id AND att.client_id = $1) AS attended,
+              (SELECT coalesce(sum(amount), 0) FROM payments p WHERE p.booking_id = b.id) AS paid
+         FROM bookings b JOIN sites s ON s.id = b.site_id JOIN spaces sp ON sp.id = b.space_id JOIN academies a ON a.id = s.academy_id
+        WHERE b.client_id = $1 AND b.kind = 'rental' AND b.starts_at >= $2 AND b.starts_at < $3`,
+      [me, start, end],
+    );
+    const now = Date.now();
+    const stateOf = (x: any): ReservationState => {
+      if (Number(x.attended) > 0) return 'attended';
+      if (x.type === 'class') {
+        if (x.my_status === 'cancelled') return 'cancelled';
+        if (x.booking_status === 'cancelled') return 'deleted';
+      } else if (x.booking_status === 'cancelled') {
+        return x.cancelled_by === me ? 'cancelled' : 'deleted';
+      }
+      return new Date(x.ends_at).getTime() < now ? 'missed' : 'pending';
+    };
+    const rows = [...classes, ...rentals]
+      .map((x) => ({ ...x, attended: Number(x.attended) > 0, paid: x.paid == null ? undefined : Number(x.paid), state: stateOf(x) }))
+      .sort((a, b) => new Date(b.starts_at).getTime() - new Date(a.starts_at).getTime());
+    const limited = hasRange ? rows.slice(0, 1000) : rows.slice(0, 20);
+    res.json({ total: rows.length, truncated: limited.length < rows.length, from: hasRange ? from : null, to: hasRange ? to : null, rows: limited });
+  });
 
   // ------------------------------------------------------------------ Reglas de la organizacion (RQ32)
   const loadSettings = async (tenantId: number) => ({
     cancelHours: await cancelHours(db, tenantId),
+    bookingHorizonMonths: (await db.query(`SELECT booking_horizon_months FROM tenants WHERE id = $1`, [tenantId]))[0]?.booking_horizon_months ?? 3,
     academies: (await db.query(`SELECT id, name, cancel_hours FROM academies WHERE tenant_id = $1 ORDER BY name`, [tenantId]))
       .map((a) => ({ id: a.id, name: a.name, cancelHours: a.cancel_hours })),
     sites: (await db.query(
@@ -101,15 +151,18 @@ export function reservationRoutes(db: Db) {
 
   // Limite general y, opcionalmente, por academia y por sede (null = hereda)
   const hours = z.coerce.number().int().min(0).max(720);
-  r.put('/settings', requireAdmin, async (req, res) => {
+  // RQ44: lo configura el admin o cualquier usuario con el permiso de reglas de reserva
+  r.put('/settings', requirePerm('booking_rules'), async (req, res) => {
     const b = parse(z.object({
       cancelHours: hours.optional(),
+      bookingHorizonMonths: z.coerce.number().int().min(1).max(24).optional(), // RQ47
       academies: z.array(z.object({ id, cancelHours: hours.nullable() })).default([]),
       sites: z.array(z.object({ id, cancelHours: hours.nullable() })).default([]),
     }), req.body);
     const t = req.user.tenantId;
     await db.tx(async (q) => {
       if (b.cancelHours != null) await q.query(`UPDATE tenants SET cancel_hours = $2 WHERE id = $1`, [t, b.cancelHours]);
+      if (b.bookingHorizonMonths != null) await q.query(`UPDATE tenants SET booking_horizon_months = $2 WHERE id = $1`, [t, b.bookingHorizonMonths]);
       for (const a of b.academies) {
         const n = await q.query(`UPDATE academies SET cancel_hours = $3 WHERE id = $1 AND tenant_id = $2 RETURNING id`, [a.id, t, a.cancelHours]);
         if (!n.length) throw new HttpError(404, 'Academia no encontrada', 'NOT_FOUND');
@@ -147,6 +200,7 @@ export function reservationRoutes(db: Db) {
     if (!b || b.kind !== 'class' || !(await visibleAcademyIds(db, req)).includes(b.academy_id)) throw new HttpError(404, 'Clase no encontrada', 'NOT_FOUND');
     if (b.status !== 'confirmed' || !b.space_active || !(b.max_capacity > 0)) throw new HttpError(409, 'Esta clase no está disponible para reservas', 'NOT_AVAILABLE');
     if (new Date(b.starts_at) <= new Date()) throw new HttpError(409, 'La clase ya empezó', 'NOT_AVAILABLE');
+    await assertWithinHorizon(db, req.user.tenantId, new Date(b.starts_at)); // RQ47
     await assertClientPlan(db, req, b.academy_id, b.site_id, 'class');
     await assertNoOverlap(db, req.user.id, new Date(b.starts_at), new Date(b.ends_at), b.id);
 
@@ -167,12 +221,16 @@ export function reservationRoutes(db: Db) {
 
   r.post('/me/class-reservations/:id/cancel', async (req, res) => {
     const [cr] = await db.query(
-      `SELECT cr.id, cr.status, b.starts_at, b.site_id FROM class_reservations cr JOIN bookings b ON b.id = cr.booking_id
+      `SELECT cr.id, cr.status, cr.booking_id, b.starts_at, b.ends_at, b.site_id FROM class_reservations cr JOIN bookings b ON b.id = cr.booking_id
         WHERE cr.id = $1 AND cr.client_id = $2`,
       [parse(id, req.params.id), req.user.id],
     );
     if (!cr) throw new HttpError(404, 'Reserva no encontrada', 'NOT_FOUND');
     if (cr.status !== 'confirmed') throw new HttpError(409, 'La reserva ya está cancelada');
+    // RQ52: no se cancela una clase ya tomada ni una vencida por inasistencia
+    const [att] = await db.query(`SELECT 1 FROM attendances WHERE booking_id = $1 AND client_id = $2`, [cr.booking_id, req.user.id]);
+    if (att) throw new HttpError(409, 'Esta clase ya fue tomada: no se puede cancelar', 'ALREADY_TAKEN');
+    if (new Date(cr.ends_at) < new Date()) throw new HttpError(409, 'Esta clase ya venció por inasistencia: no se puede cancelar', 'EXPIRED');
     await assertCanCancel(db, req.user.tenantId, cr.starts_at, cr.site_id);
     await db.query(`UPDATE class_reservations SET status = 'cancelled', cancelled_at = $2 WHERE id = $1`, [cr.id, new Date()]);
     res.json({ ok: true });

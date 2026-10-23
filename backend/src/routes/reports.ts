@@ -209,17 +209,19 @@ async function classesReport(db: Db, tenantId: number, f: Filters, clientId?: nu
   const reserved: any[] = await db.query(
     `SELECT cr.id AS reservation_id, cr.client_id, u.full_name AS client_name, cr.created_at AS reserved_at,
             b.id AS booking_id, b.title, b.starts_at, b.ends_at, b.status AS booking_status, s.name AS site_name, a.name AS academy_name,
+            t.full_name AS teacher_name,
             (SELECT max(att.scanned_at) FROM attendances att WHERE att.booking_id = b.id AND att.client_id = cr.client_id) AS attended_at
        FROM class_reservations cr JOIN bookings b ON b.id = cr.booking_id JOIN users u ON u.id = cr.client_id
-       JOIN sites s ON s.id = b.site_id JOIN academies a ON a.id = s.academy_id
+       JOIN sites s ON s.id = b.site_id JOIN academies a ON a.id = s.academy_id LEFT JOIN teachers t ON t.id = b.teacher_id
       WHERE ${where} AND cr.status = 'confirmed' AND ($6::int IS NULL OR cr.client_id = $6)`,
     params,
   );
   const walkIns: any[] = await db.query(
     `SELECT att.client_id, u.full_name AS client_name, att.scanned_at AS attended_at,
-            b.id AS booking_id, b.title, b.starts_at, b.ends_at, b.status AS booking_status, s.name AS site_name, a.name AS academy_name
+            b.id AS booking_id, b.title, b.starts_at, b.ends_at, b.status AS booking_status, s.name AS site_name, a.name AS academy_name,
+            t.full_name AS teacher_name
        FROM attendances att JOIN bookings b ON b.id = att.booking_id JOIN users u ON u.id = att.client_id
-       JOIN sites s ON s.id = b.site_id JOIN academies a ON a.id = s.academy_id
+       JOIN sites s ON s.id = b.site_id JOIN academies a ON a.id = s.academy_id LEFT JOIN teachers t ON t.id = b.teacher_id
       WHERE ${where} AND ($6::int IS NULL OR att.client_id = $6)
         AND NOT EXISTS (SELECT 1 FROM class_reservations cr WHERE cr.booking_id = b.id AND cr.client_id = att.client_id AND cr.status = 'confirmed')`,
     params,
@@ -249,6 +251,33 @@ async function classesReport(db: Db, tenantId: number, f: Filters, clientId?: nu
   };
 }
 
+/** RQ51: clientes que mas planes adquieren y mas asisten en el periodo */
+async function topClientsReport(db: Db, tenantId: number, f: Filters, limit = 20) {
+  const [start, end] = dayBounds(f.from, f.to);
+  const plans: any[] = await db.query(
+    `SELECT m.client_id, u.full_name, count(*) AS plans,
+            (SELECT coalesce(sum(p.amount), 0) FROM payments p WHERE p.client_id = m.client_id AND p.paid_at >= $2 AND p.paid_at < $3) AS paid
+       FROM memberships m JOIN users u ON u.id = m.client_id
+      WHERE m.tenant_id = $1 AND m.created_at >= $2 AND m.created_at < $3
+        AND ($4::int IS NULL OR EXISTS (SELECT 1 FROM plan_academies pa WHERE pa.plan_id = m.plan_id AND pa.academy_id = $4))
+      GROUP BY m.client_id, u.full_name`,
+    [tenantId, start, end, f.academyId ?? null],
+  );
+  const att = await attendanceRows(db, tenantId, f);
+  const visits = [...groupBy(att, (r) => String(r.client_id))].map(([cid, list]) => ({
+    client_id: Number(cid), full_name: list[0].client_name, visits: list.length, days: distinct(list, dayOf),
+  }));
+  const byId = new Map<number, any>();
+  for (const p of plans) byId.set(p.client_id, { client_id: p.client_id, full_name: p.full_name, plans: Number(p.plans), paid: Number(p.paid), visits: 0, days: 0 });
+  for (const v of visits) byId.set(v.client_id, { plans: 0, paid: 0, ...byId.get(v.client_id), ...v });
+  const all = [...byId.values()];
+  return {
+    from: f.from, to: f.to,
+    byPlans: [...all].filter((c) => c.plans > 0).sort((a, b) => b.plans - a.plans || b.paid - a.paid).slice(0, limit),
+    byAttendance: [...all].filter((c) => c.visits > 0).sort((a, b) => b.visits - a.visits || b.days - a.days).slice(0, limit),
+  };
+}
+
 export function reportRoutes(db: Db) {
   const r = Router();
   const readFilters = (q: unknown): Filters => {
@@ -275,6 +304,10 @@ export function reportRoutes(db: Db) {
     if (!req.user.permissions.includes('reports')) throw new HttpError(403, 'No tienes permiso para esta acción', 'FORBIDDEN');
     const clientId = parse(optId, req.query.clientId);
     res.json(await classesReport(db, req.user.tenantId, f, clientId));
+  });
+
+  r.get('/reports/top-clients', requirePerm('reports'), async (req, res) => {
+    res.json(await topClientsReport(db, req.user.tenantId, readFilters(req.query)));
   });
 
   r.get('/reports/attendance', requirePerm('reports'), async (req, res) => {

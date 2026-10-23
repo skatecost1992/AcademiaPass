@@ -7,7 +7,7 @@ import type { UnifiedReport } from '../types';
 
 /** Reporte del cliente: solo su informacion (RQ8, RQ15) */
 export default function MyReport() {
-  const range = useRange(90);
+  const range = useRange('month');
   const report = useLoad<UnifiedReport>(`/reports/me${qs({ from: range.from, to: range.to })}`);
   // RQ41: el cliente solo recibe sus propias clases
   const classes = useLoad<ClassesReport>(`/reports/classes${qs({ from: range.from, to: addDays(range.to, 30) })}`); // incluye las reservadas por venir

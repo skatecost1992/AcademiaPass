@@ -11,7 +11,8 @@ import { z } from 'zod';
 import { HttpError, isStaffish } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { assertSpaceAvailable, assertWithinOpeningHours, type Space } from '../lib/capacity.ts';
-import { dateStr, dayBounds, id, idList, isoDateTime, optId, optText, own, parse, range, todayLocal } from '../lib/util.ts';
+import { assertWithinHorizon, freeSlots } from '../lib/scheduling.ts';
+import { dateStr, dayBounds, id, idList, localParts, isoDateTime, optId, optText, own, parse, range, todayLocal } from '../lib/util.ts';
 import { assertCanCancel, assertClientPlan, assertNoOverlap, myReservationIds } from './reservations.ts';
 import { visibleAcademyIds } from './setup.ts';
 
@@ -98,7 +99,19 @@ async function createBookings(db: Db, req: Request, b: z.infer<typeof bookingBod
         assertWithinOpeningHours(space.site_name, space.site_hours, s, e);
         // RQ40: si el espacio tiene su propio horario de disponibilidad, tambien debe caber en el
         if (space.opening_hours?.length) assertWithinOpeningHours(space.name, space.opening_hours, s, e, 'el espacio');
-        await assertSpaceAvailable(q, space, s, e, groupSize!);
+        await assertWithinHorizon(q, tenantId, s); // RQ47
+        try {
+          await assertSpaceAvailable(q, space, s, e, groupSize!);
+        } catch (err) {
+          // RQ42: si el horario esta ocupado, se sugieren las franjas libres de ese dia
+          if (err instanceof HttpError && (err.code === 'SPACE_TAKEN' || err.code === 'CAPACITY_FULL')) {
+            const day = localParts(s).date;
+            const available = await freeSlots(q, space.id, day);
+            err.message += available.length ? `. Horarios disponibles ese día: ${available.join(', ')}` : '. No quedan horarios disponibles ese día.';
+            err.extra = { ...err.extra, available, date: day };
+          }
+          throw err;
+        }
         if (b.clientId) await assertNoOverlap(q, b.clientId, s, e); // RQ38
       } catch (err) {
         if (err instanceof HttpError && b.repeatWeeks > 1) err.message = `Semana ${i + 1} (${s.toISOString().slice(0, 10)}): ${err.message}`;
@@ -191,8 +204,14 @@ export function bookingRoutes(db: Db) {
     const canStaff = req.user.permissions.includes(b.kind === 'class' ? 'classes' : 'bookings');
     const isOwner = req.user.role === 'client' && b.client_id === req.user.id;
     if (!canStaff && !isOwner) throw new HttpError(403, 'No tienes permiso para esta acción', 'FORBIDDEN');
-    if (isOwner && !canStaff) await assertCanCancel(db, req.user.tenantId, b.starts_at, b.site_id);
-    await db.query(`UPDATE bookings SET status = 'cancelled' WHERE id = $1`, [b.id]);
+    if (isOwner && !canStaff) {
+      // RQ52: no se cancela lo ya tomado ni lo vencido
+      const [att] = await db.query(`SELECT 1 FROM attendances WHERE booking_id = $1 AND client_id = $2`, [b.id, req.user.id]);
+      if (att) throw new HttpError(409, 'Esta reserva ya fue tomada: no se puede cancelar', 'ALREADY_TAKEN');
+      if (new Date(b.ends_at) < new Date()) throw new HttpError(409, 'Esta reserva ya venció: no se puede cancelar', 'EXPIRED');
+      await assertCanCancel(db, req.user.tenantId, b.starts_at, b.site_id);
+    }
+    await db.query(`UPDATE bookings SET status = 'cancelled', cancelled_by = $2, cancelled_at = $3 WHERE id = $1`, [b.id, req.user.id, new Date()]);
     res.json({ ok: true });
   });
 

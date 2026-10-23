@@ -13,7 +13,7 @@ import { sharePdf } from '../lib/pdf';
 import { summaryReportHtml } from '../lib/report';
 import { useSession } from '../session';
 
-type Tab = 'summary' | 'attendance' | 'classes' | 'capacity' | 'payments';
+type Tab = 'summary' | 'attendance' | 'classes' | 'top' | 'capacity' | 'payments';
 type G = 'week' | 'month';
 
 function AttendanceView({ a, g }: { a: any; g: G }) {
@@ -72,6 +72,20 @@ function CapacityView({ c, g }: { c: any; g: G }) {
   );
 }
 
+/** RQ51: clientes que mas planes adquieren y mas asisten */
+function TopClientsView({ t }: { t: any }) {
+  return (
+    <>
+      <Section title="Más planes adquiridos">
+        <Bars rows={t.byPlans.map((c: any) => ({ label: c.full_name, value: c.plans, right: `${c.plans} plan(es) · ${money(c.paid)}` }))} empty="Nadie adquirió planes en el periodo." />
+      </Section>
+      <Section title="Más asistencias">
+        <Bars rows={t.byAttendance.map((c: any) => ({ label: c.full_name, value: c.visits, right: `${c.visits} asistencias · ${c.days} días` }))} empty="Sin asistencias en el periodo." />
+      </Section>
+    </>
+  );
+}
+
 function PaymentsView({ p, g }: { p: any; g: G }) {
   return (
     <>
@@ -95,15 +109,16 @@ export default function Reports() {
     can('reports') && { value: 'summary' as Tab, label: 'Resumen' },
     can('reports') && { value: 'attendance' as Tab, label: 'Asistencia' },
     can('reports') && { value: 'classes' as Tab, label: 'Clases' },
+    can('reports') && { value: 'top' as Tab, label: 'Top clientes' },
     can('capacity_reports') && { value: 'capacity' as Tab, label: 'Aforo' },
     can('reports') && { value: 'payments' as Tab, label: 'Pagos' },
   ].filter(Boolean) as { value: Tab; label: string }[];
   const [tab, setTab] = useState<Tab>(tabs[0]?.value ?? 'capacity');
-  const range = useRange(90);
+  const range = useRange('month');
   const [academyId, setAcademyId] = useState<number | null>(null);
   const [siteId, setSiteId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
-  const path = { summary: '/reports/summary', attendance: '/reports/attendance', classes: '/reports/classes', capacity: '/reports/capacity', payments: '/reports/payments' }[tab];
+  const path = { summary: '/reports/summary', attendance: '/reports/attendance', classes: '/reports/classes', top: '/reports/top-clients', capacity: '/reports/capacity', payments: '/reports/payments' }[tab];
   const data = useLoad<any>(`${path}${qs({ from: range.from, to: range.to, groupBy: range.groupBy, academyId, siteId })}`);
   const g = (data.data?.groupBy ?? range.groupBy) as G;
 
@@ -129,6 +144,7 @@ export default function Reports() {
         {(d) => {
           if (tab === 'attendance') return <AttendanceView a={d} g={g} />;
           if (tab === 'classes') return <ClassesReportView report={d} showClient />;
+          if (tab === 'top') return <TopClientsView t={d} />;
           if (tab === 'capacity') return <CapacityView c={d} g={g} />;
           if (tab === 'payments') return <PaymentsView p={d} g={g} />;
           if (!d.kpi) return null;

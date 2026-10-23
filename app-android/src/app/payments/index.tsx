@@ -10,7 +10,7 @@ interface PaymentRow { id: number; amount: number; method: string; reference: st
 
 /** Pagos de planes y reservas (RQ4, RQ6) */
 export default function Payments() {
-  const range = useRange(30);
+  const range = useRange('month');
   const [academyId, setAcademyId] = useState<number | null>(null);
   const [siteId, setSiteId] = useState<number | null>(null);
   const list = useLoad<PaymentRow[]>(`/payments${qs({ from: range.from, to: range.to, academyId, siteId })}`);

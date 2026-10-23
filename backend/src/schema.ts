@@ -262,4 +262,13 @@ CREATE INDEX IF NOT EXISTS capacity_requests_pending_idx ON capacity_requests (t
 
 -- RQ40: horario de disponibilidad propio del espacio (NULL = el de la sede)
 ALTER TABLE spaces ADD COLUMN IF NOT EXISTS opening_hours jsonb;
+
+-- RQ47: hasta cuantos meses adelante se puede reservar
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS booking_horizon_months int NOT NULL DEFAULT 3;
+
+-- RQ52: cupo reservado y no tomado: al terminar la clase se descuenta del plan (una sola vez)
+ALTER TABLE class_reservations ADD COLUMN IF NOT EXISTS settled_at timestamptz;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_by int REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_at timestamptz;
+ALTER TABLE class_reservations ADD COLUMN IF NOT EXISTS penalty_membership_id int REFERENCES memberships(id) ON DELETE SET NULL;
 `;

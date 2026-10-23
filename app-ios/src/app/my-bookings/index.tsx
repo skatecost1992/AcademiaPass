@@ -1,86 +1,100 @@
 import { router } from 'expo-router';
-import React from 'react';
-import { BookingList } from '../../components/BookingList';
-import { Badge, Button, Empty, Gap, ListItem, Loader, Muted, RowWrap, Screen, Section, confirm, errorText, notify, useLoad } from '../../components/ui';
+import React, { useState } from 'react';
+import { Text, View } from 'react-native';
+import { Calendar } from '../../components/Calendar';
+import { Badge, Button, Card, Empty, Gap, ListItem, Loader, Muted, RowWrap, Screen, Section, colors, confirm, errorText, notify, useLoad } from '../../components/ui';
 import { post, qs } from '../../lib/api';
-import { addDays, fmtDateTime, fmtRange, money, today } from '../../lib/format';
-import { useSession } from '../../session';
-import type { Booking } from '../../types';
+import { addDays, fmtRange, money, today } from '../../lib/format';
 
-interface ClassReservation {
-  id: number; booking_id: number; title: string; starts_at: string; ends_at: string; group_size: number; reserved: number;
-  booking_status: string; site_name: string; space_name: string; academy_name: string; teacher_name: string | null;
-  cancel_hours: number; cancel_until: string;
+type State = 'attended' | 'cancelled' | 'deleted' | 'missed' | 'pending';
+
+interface MyReservation {
+  id: number; type: 'class' | 'rental'; booking_id: number; title: string; starts_at: string; ends_at: string;
+  site_name: string; space_name: string; academy_name: string; teacher_name?: string | null; paid?: number; state: State;
 }
 
-/** Reservas del cliente: cupos en clases (RQ30-RQ32) y espacios reservados (RQ7) */
+const STATE: Record<State, [string, 'success' | 'muted' | 'danger' | 'accent' | 'primary']> = {
+  attended: ['Asistida', 'success'],
+  cancelled: ['Cancelada', 'muted'],
+  deleted: ['Eliminada por la academia', 'danger'],
+  missed: ['No asistió', 'accent'],
+  pending: ['Pendiente', 'primary'],
+};
+
+/**
+ * Mis reservas (RQ48, RQ49): cupos en clases y espacios con su estado, de la mas reciente a la mas antigua.
+ * Sin filtro muestra las 20 mas recientes; con los calendarios desde/hasta consulta hasta un ano.
+ */
 export default function MyBookings() {
-  const { user } = useSession();
-  const from = addDays(today(), -30);
-  const list = useLoad<Booking[]>(`/bookings${qs({ from, to: addDays(today(), 120), kind: 'rental' })}`);
-  const classes = useLoad<ClassReservation[]>('/me/class-reservations');
-  const mine = (list.data ?? []).filter((b) => b.client_id === user?.id);
-  // RQ35: cada academia y sede define su limite; en cada clase se muestra hasta cuando se puede cancelar
-  const rule = 'Cada sede define hasta cuándo puedes cancelar; lo ves en cada clase.';
+  const [range, setRange] = useState<{ from: string; to: string } | null>(null);
+  const [picking, setPicking] = useState<null | 'from' | 'to'>(null);
+  const [draft, setDraft] = useState({ from: addDays(today(), -30), to: today() });
+  const list = useLoad<{ total: number; truncated: boolean; rows: MyReservation[] }>(`/me/reservations${qs(range ?? {})}`);
+  const days = (Date.parse(draft.to) - Date.parse(draft.from)) / 86400_000;
+  const rangeError = draft.from > draft.to ? 'La fecha inicial es mayor que la final' : days > 366 ? 'El rango máximo es de un año' : null;
 
-  const reload = () => {
-    void list.reload();
-    void classes.reload();
-  };
-
-  const cancelClass = async (r: ClassReservation) => {
-    if (!(await confirm(r.title, `${fmtRange(r.starts_at, r.ends_at)}\n${r.site_name} · ${r.space_name}\n\n¿Cancelar tu cupo?`, 'Cancelar cupo'))) return;
+  const cancel = async (r: MyReservation) => {
+    const label = r.type === 'class' ? 'tu cupo' : 'la reserva';
+    if (!(await confirm(r.title, `${fmtRange(r.starts_at, r.ends_at)}\n${r.site_name} · ${r.space_name}\n\n¿Cancelar ${label}?`, 'Cancelar'))) return;
     try {
-      await post(`/me/class-reservations/${r.id}/cancel`);
-      notify('Cupo cancelado');
-      reload();
+      await post(r.type === 'class' ? `/me/class-reservations/${r.id}/cancel` : `/bookings/${r.id}/cancel`);
+      notify('Cancelada');
+      await list.reload();
     } catch (e) {
       notify('No se pudo cancelar', errorText(e));
     }
   };
 
-  const open = async (b: Booking) => {
-    const future = new Date(b.starts_at) > new Date();
-    const info = `${b.site_name} · ${b.space_name}\n${b.group_size} persona(s)\nPagado: ${money(b.paid)}`;
-    if (!future || b.status === 'cancelled') return notify(b.title, info);
-    if (await confirm(b.title, `${info}\n\n¿Quieres cancelar esta reserva?`, 'Cancelar reserva')) {
-      try {
-        await post(`/bookings/${b.id}/cancel`);
-        reload();
-      } catch (e) {
-        notify('No se pudo cancelar', errorText(e));
-      }
-    }
-  };
-
-  const upcoming = (classes.data ?? []).filter((r) => new Date(r.ends_at) > new Date());
   return (
-    <Screen title="Mis reservas" onRefresh={reload} refreshing={list.loading || classes.loading}>
+    <Screen title="Mis reservas" onRefresh={list.reload} refreshing={list.loading}>
       <RowWrap>
         <Button label="Reservar clase" icon="school-outline" onPress={() => router.push('/schedule')} />
         <Button label="Reservar espacio" icon="add" variant="secondary" onPress={() => router.push('/my-bookings/new')} />
       </RowWrap>
-      {rule ? <Muted style={{ marginTop: 10 }}>{rule}</Muted> : null}
 
-      <Section title="Mis clases">
-        <Loader state={classes}>
-          {() => upcoming.length === 0 ? <Empty text="No tienes cupos reservados en clases." icon="school-outline" /> : upcoming.map((r) => (
-            <ListItem
-              key={r.id}
-              icon="school-outline"
-              title={r.title}
-              subtitle={`${fmtRange(r.starts_at, r.ends_at)}\n${r.academy_name} · ${r.site_name} · ${r.space_name}${r.teacher_name ? ` · ${r.teacher_name}` : ''}\n${new Date(r.cancel_until) > new Date() ? `Cancelas hasta ${fmtDateTime(r.cancel_until)}` : 'Ya no se puede cancelar desde la app'}`}
-              right={r.booking_status === 'cancelled' ? <Badge text="Clase cancelada" tone="danger" /> : <Badge text={`${r.reserved}/${r.group_size}`} tone="success" />}
-              onPress={() => cancelClass(r)}
-            />
-          ))}
-        </Loader>
+      <Section title="Consultar por fechas">
+        <Card>
+          <RowWrap>
+            <Button small variant={picking === 'from' ? 'primary' : 'secondary'} icon="calendar-outline" label={`Desde ${draft.from}`} onPress={() => setPicking(picking === 'from' ? null : 'from')} />
+            <Button small variant={picking === 'to' ? 'primary' : 'secondary'} icon="calendar-outline" label={`Hasta ${draft.to}`} onPress={() => setPicking(picking === 'to' ? null : 'to')} />
+          </RowWrap>
+          {picking ? (
+            <View style={{ marginTop: 8 }}>
+              <Calendar value={draft[picking]} onChange={(d) => { setDraft({ ...draft, [picking]: d }); setPicking(null); }}
+                min={addDays(today(), -730)} max={addDays(today(), 365)} />
+            </View>
+          ) : null}
+          {rangeError ? <Text style={{ color: colors.danger, marginTop: 6 }}>{rangeError}</Text> : null}
+          <RowWrap style={{ marginTop: 8 }}>
+            <Button small label="Consultar" icon="search" onPress={() => setRange(draft)} disabled={!!rangeError} />
+            {range ? <Button small variant="ghost" label="Ver las 20 más recientes" onPress={() => setRange(null)} /> : null}
+          </RowWrap>
+        </Card>
       </Section>
 
-      <Section title="Mis espacios reservados">
-        <Muted style={{ marginBottom: 6 }}>El pago de la reserva se registra en la recepción de la academia.</Muted>
+      <Section title={range ? `Del ${range.from} al ${range.to}` : 'Las 20 más recientes'}>
+        <Loader state={list}>
+          {(d) => d.rows.length === 0 ? <Empty text="No tienes reservas en este periodo." icon="bookmark-outline" /> : (
+            <>
+              {d.rows.map((r) => (
+                <ListItem
+                  key={`${r.type}-${r.id}`}
+                  icon={r.type === 'class' ? 'school-outline' : 'bookmark-outline'}
+                  title={r.title}
+                  subtitle={`${fmtRange(r.starts_at, r.ends_at)}\n${r.academy_name} · ${r.site_name} · ${r.space_name}${r.teacher_name ? ` · Prof. ${r.teacher_name}` : ''}${r.type === 'rental' && r.paid != null ? ` · pagado ${money(r.paid)}` : ''}`}
+                  right={<Badge text={STATE[r.state][0]} tone={STATE[r.state][1]} />}
+                  onPress={r.state === 'pending' ? () => cancel(r) : undefined}
+                />
+              ))}
+              {d.truncated ? <Muted style={{ fontSize: 12 }}>Hay {d.total} reservas; se muestran {d.rows.length}. Usa los calendarios para consultar otro periodo.</Muted> : null}
+            </>
+          )}
+        </Loader>
         <Gap h={4} />
-        <Loader state={list}>{() => <BookingList bookings={mine} onPress={open} showMoney />}</Loader>
+        <Muted style={{ fontSize: 12 }}>
+          Toca una reserva pendiente para cancelarla. No se pueden cancelar reservas ya tomadas ni vencidas; si reservaste una clase y no
+          asististe, al terminar la clase se descuenta de tu plan.
+        </Muted>
       </Section>
     </Screen>
   );

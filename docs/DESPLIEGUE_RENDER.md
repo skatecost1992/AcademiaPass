@@ -29,6 +29,10 @@ responden). Render no permite cambiar un servicio existente de Node a Docker, as
    | `BREVO_API_KEY` | Clave de Brevo, o vacía si usas Resend |
    | `MAIL_FROM` | `AcademiaPass <avisos@tu-dominio.com>` (dominio verificado en Resend, o el correo verificado en Brevo) |
    | `ADMIN_SIGNUP_CODE` | Opcional |
+   | `ADMIN_INITIAL_PASSWORD` | Clave del usuario base `admin` (mín. 8 caracteres); vacía = se genera y sale una vez en *Logs* |
+
+   Sin `DATABASE_URL` el servicio se detiene al arrancar con un mensaje en *Logs*: en producción no usa la base
+   embebida (PGlite), que perdería los datos en cada despliegue y supera los 512 MB del plan gratuito.
 
    `JWT_SECRET` la genera Render. Las claves se pegan **solo** en Render; no las subas a git ni al chat.
 3. **Esperar el despliegue** (*Events / Logs*, la primera vez 5–10 min) hasta ver **Live** y abrir

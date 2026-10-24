@@ -8,6 +8,7 @@ import { after, before, describe, it } from 'node:test';
 
 process.env.PGLITE_DIR = 'memory://';
 process.env.JWT_SECRET = 'test-secret';
+process.env.ADMIN_INITIAL_PASSWORD = 'Bogota.2027'; // clave del usuario base en las pruebas
 // Zona horaria de la prueba: se elige para que la hora local sea cerca del mediodia, asi los horarios de las sedes
 // (05:00-23:00) y las ventanas de "hoy" no dependen de la hora a la que se corran las pruebas
 const OFFSET_H = (() => { const o = 12 - new Date().getUTCHours(); return o > 14 ? o - 24 : o < -12 ? o + 24 : o; })();

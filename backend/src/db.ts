@@ -125,6 +125,15 @@ export async function openDb(): Promise<Db> {
   }
   dialect = 'postgres';
   const url = process.env.DATABASE_URL;
+  // En produccion PGlite no sirve: los datos quedarian en el disco temporal del servicio (se pierden en cada
+  // despliegue) y su motor embebido supera la memoria del plan gratuito de Render (512 MB)
+  if (!url && process.env.NODE_ENV === 'production' && process.env.ALLOW_PGLITE !== 'on') {
+    throw new Error(
+      'Falta la variable DATABASE_URL. En produccion la API necesita la cadena de conexion de PostgreSQL ' +
+      '(p. ej. Neon: postgresql://usuario:clave@host/base?sslmode=require). Definela en las variables de entorno ' +
+      'del servicio (Render: Environment) y vuelve a desplegar.',
+    );
+  }
   dbInfo = url ? describePg(url) : { engine: 'PostgreSQL', provider: 'PGlite', host: 'local', database: process.env.PGLITE_DIR ?? './.data/pglite' };
   const db = url ? await createPg(url) : await createPglite(process.env.PGLITE_DIR ?? './.data/pglite');
   await db.exec(SCHEMA);

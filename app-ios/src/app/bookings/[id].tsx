@@ -14,13 +14,18 @@ interface Detail extends Booking {
 
 export default function BookingDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { can } = useSession();
+  const { can, user } = useSession();
   const d = useLoad<Detail>(`/bookings/${id}`);
 
-  const cancel = async () => {
-    if (!(await confirm('Cancelar', '¿Cancelar esta clase o reserva? El espacio quedará libre.', 'Cancelar'))) return;
+  // RQ69: el profesor cancela su sesion con la anticipacion definida (cuenta como clase a la que no asistio); el
+  // personal puede marcar ese mismo motivo al cancelar una clase
+  const cancel = async (reason?: 'teacher_absent') => {
+    const msg = user?.teacher
+      ? '¿Cancelar tu sesión? Cuenta como clase a la que no pudiste asistir y se avisa a los clientes con cupo.'
+      : reason ? '¿Cancelar la sesión porque el profesor no puede asistir? Se avisa a los clientes con cupo.' : '¿Cancelar esta clase o reserva? El espacio quedará libre.';
+    if (!(await confirm('Cancelar', msg, 'Cancelar'))) return;
     try {
-      await post(`/bookings/${id}/cancel`);
+      await post(`/bookings/${id}/cancel`, reason ? { reason } : {});
       await d.reload();
     } catch (e) {
       notify('No se pudo cancelar', errorText(e));
@@ -72,7 +77,14 @@ export default function BookingDetail() {
               </Section>
             ) : null}
             <Gap h={16} />
-            {b.status !== 'cancelled' && can(b.kind === 'class' ? 'classes' : 'bookings') ? <Button label="Cancelar" variant="danger" icon="close-circle-outline" onPress={cancel} /> : null}
+            {b.status !== 'cancelled' && can(b.kind === 'class' ? 'classes' : 'bookings') && (!user?.teacher || b.teacher_id === user.teacher.id) ? (
+              <>
+                <Button label="Cancelar" variant="danger" icon="close-circle-outline" onPress={() => cancel()} />
+                {b.kind === 'class' && !user?.teacher && b.teacher_id ? (
+                  <Button label="Cancelar: el profesor no puede asistir" variant="ghost" icon="person-remove-outline" onPress={() => cancel('teacher_absent')} />
+                ) : null}
+              </>
+            ) : null}
           </>
         )}
       </Loader>

@@ -147,7 +147,7 @@ function ServerOptions() {
       <Section title="Importante">
         <Card>
           <Muted>• Cada servidor tiene su propia base de datos y sus propios usuarios. El administrador solo autoriza el cambio: después cada persona inicia sesión con su usuario de ese servidor.</Muted>
-          <Muted>• El usuario inicial es admin (clave inicial Bogota.2027). Cámbiala en Mi perfil → Contraseña: queda guardada en la base de ese servidor.</Muted>
+          <Muted>• El usuario inicial es admin; su clave inicial la define quien instala el servidor. Cámbiala en Mi perfil → Contraseña: queda guardada en la base de ese servidor.</Muted>
           <Muted>• Local: en el PC ejecuta iniciar-local-sqlserver.ps1 dentro de backend.</Muted>
           <Muted>• Nube gratuita: si estuvo inactiva, la primera conexión tarda hasta 1 minuto.</Muted>
         </Card>

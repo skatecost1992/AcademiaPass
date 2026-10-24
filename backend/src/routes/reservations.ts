@@ -11,7 +11,7 @@ import { HttpError, requirePerm } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { KINDS_FOR_CONTEXT, membershipsOf, pickMembership } from '../lib/memberships.ts';
 import { assertWithinHorizon } from '../lib/scheduling.ts';
-import { dateStr, dayBounds, id, idList, localParts, parse, range } from '../lib/util.ts';
+import { dateStr, dayBounds, id, idList, localParts, lockRow, parse, range } from '../lib/util.ts';
 import { visibleAcademyIds } from './setup.ts';
 
 export async function cancelHours(db: Db, tenantId: number): Promise<number> {
@@ -206,9 +206,13 @@ export function reservationRoutes(db: Db) {
     if (new Date(b.starts_at) <= new Date()) throw new HttpError(409, 'La clase ya empezó', 'NOT_AVAILABLE');
     await assertWithinHorizon(db, req.user.tenantId, new Date(b.starts_at)); // RQ47
     await assertClientPlan(db, req, b.academy_id, b.site_id, 'class');
-    await assertNoOverlap(db, req.user.id, new Date(b.starts_at), new Date(b.ends_at), b.id);
 
     const reservationId = await db.tx(async (q) => {
+      // Serializa las reservas de la misma clase y del mismo cliente: dos peticiones simultaneas no pueden tomar el
+      // ultimo cupo a la vez (RQ20) ni reservar dos clases que se cruzan (RQ38)
+      await lockRow(q, 'bookings', b.id);
+      await lockRow(q, 'users', req.user.id);
+      await assertNoOverlap(q, req.user.id, new Date(b.starts_at), new Date(b.ends_at), b.id);
       const [dup] = await q.query(`SELECT id FROM class_reservations WHERE booking_id = $1 AND client_id = $2 AND status = 'confirmed'`, [b.id, req.user.id]);
       if (dup) throw new HttpError(409, 'Ya tienes un cupo en esta clase', 'ALREADY_RESERVED');
       const [{ n }] = await q.query(`SELECT count(*) AS n FROM class_reservations WHERE booking_id = $1 AND status = 'confirmed'`, [b.id]);

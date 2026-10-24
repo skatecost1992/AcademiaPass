@@ -16,6 +16,7 @@ export interface Profile {
   consentRequired: boolean;
   tenant: { id: number; name: string };
   isSuperadmin?: boolean; // RQ58
+  teacher?: { id: number; name: string } | null; // RQ69: usuario de un profesor
   academies: { id: number; name: string; join_code?: string }[];
 }
 
@@ -30,6 +31,7 @@ export interface Space {
 export interface Teacher {
   id: number; full_name: string; kind: 'internal' | 'external'; phone: string | null; email: string | null; specialty: string | null; active: boolean;
   sites: { id: number; name: string; academy_id: number; academy_name: string }[]; // RQ62
+  account: { userId: number; username: string; permissions: Permission[]; active: boolean } | null; // RQ69
 }
 export interface ClassDef { id: number; academy_id: number; academy_name: string; teacher_id: number | null; teacher_name: string | null; teacher_kind: string | null; name: string; description: string | null; default_capacity: number; active: boolean;
   space_id: number | null; space_name: string | null; site_id: number | null; site_name: string | null; // RQ61

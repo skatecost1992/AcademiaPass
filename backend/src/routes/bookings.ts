@@ -13,7 +13,7 @@ import { compose, sendMail } from '../lib/mailer.ts';
 import type { Db } from '../db.ts';
 import { assertSpaceAvailable, assertWithinOpeningHours, type Space } from '../lib/capacity.ts';
 import { assertWithinHorizon, freeSlots } from '../lib/scheduling.ts';
-import { dateStr, dayBounds, id, idList, localParts, isoDateTime, optId, optText, own, parse, range, todayLocal } from '../lib/util.ts';
+import { dateStr, dayBounds, id, idList, localParts, isoDateTime, lockRow, optId, optText, own, parse, range, todayLocal } from '../lib/util.ts';
 import { assertCanCancel, assertClientPlan, assertNoOverlap, myReservationIds } from './reservations.ts';
 import { visibleAcademyIds } from './setup.ts';
 
@@ -188,6 +188,11 @@ export async function createBookingsDetailed(db: Db, req: Request, b: z.infer<ty
   const staff = isStaffish(req.user);
 
   return db.tx(async (q) => {
+    // Serializa las reservas del mismo espacio, profesor y cliente: sin esto dos peticiones simultaneas podrian
+    // validar el mismo horario libre y guardarse las dos (RQ18, RQ38, RQ62)
+    await lockRow(q, 'spaces', space.id);
+    if (teacherId) await lockRow(q, 'teachers', teacherId);
+    if (b.clientId) await lockRow(q, 'users', b.clientId);
     const created: number[] = [];
     const conflicts: BookingConflict[] = [];
     const offsets = occurrenceOffsets(start, b.repeatWeeks, b.weekdays);

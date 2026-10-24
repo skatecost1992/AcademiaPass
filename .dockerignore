@@ -6,8 +6,5 @@
 resources
 docs
 app-ios
-app-android/android
-app-android/.expo
-app-android/dist
-backend/public
+app-android
 backend/test

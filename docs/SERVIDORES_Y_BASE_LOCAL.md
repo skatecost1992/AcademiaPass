@@ -36,7 +36,8 @@ Si cambias estos valores debes **recompilar el APK** (`build-apk.ps1`). La app s
 ### Usuario `admin` en la base
 
 Al arrancar, el backend revisa la tabla `users`; si no existe el usuario `admin`, lo crea con su organización
-("Mi organización"), una academia y una sede, y con la clave inicial **`Bogota.2027`** guardada como hash
+("Mi organización"), una academia y una sede, y con la clave inicial de `ADMIN_INITIAL_PASSWORD` (si no
+está definida se genera una al azar y se muestra una sola vez en la consola del servidor) guardada como hash
 bcrypt, igual que cualquier otro usuario (`src/bootstrap.ts`). Así hay un `admin` en cada base: la de la nube y
 la local de SQL Server.
 

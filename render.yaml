@@ -44,3 +44,5 @@ services:
         sync: false # remitente verificado, p. ej. AcademiaPass <avisos@tu-dominio.com>
       - key: ADMIN_SIGNUP_CODE
         sync: false # opcional: si lo defines, solo quien lo conozca puede registrar una organizacion
+      - key: ADMIN_INITIAL_PASSWORD
+        sync: false # clave del usuario base admin al crearlo; vacia = se genera y se muestra una vez en Logs

@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { type AuthUser, HttpError, assertOwnTeacher, effectivePermissions, requireAdmin, requirePerm, verifyQr } from '../auth.ts';
 import type { Db } from '../db.ts';
 import { KINDS_FOR_CONTEXT, membershipsOf, pickMembership, type MembershipView } from '../lib/memberships.ts';
-import { dateStr, dayBounds, id, localParts, optId, own, parse, range } from '../lib/util.ts';
+import { dateStr, dayBounds, id, localParts, lockRow, optId, own, parse, range } from '../lib/util.ts';
 
 /** RQ39: el ingreso se valida desde 1 hora antes del inicio */
 const ENTRY_WINDOW_MS = 3600_000;
@@ -40,6 +40,20 @@ export async function capacityContacts(db: Db, tenantId: number) {
   return rows
     .filter((u) => effectivePermissions(u.role, Array.isArray(u.permissions) ? u.permissions : []).includes('override_capacity'))
     .map((u) => ({ id: u.id, fullName: u.full_name, phone: u.phone, email: u.email, role: u.role }));
+}
+
+/** Motivo si la clase o el espacio ya no tienen cupo segun los ingresos registrados (RQ20); null si hay cupo */
+async function capacityFull(db: Db, booking: any): Promise<string | null> {
+  const [{ n }] = await db.query(`SELECT count(*)::int AS n FROM attendances WHERE booking_id = $1`, [booking.id]);
+  const [space] = await db.query(`SELECT name, max_capacity FROM spaces WHERE id = $1`, [booking.space_id]);
+  const [{ inSpace }] = await db.query(
+    `SELECT count(*)::int AS "inSpace" FROM attendances att JOIN bookings ob ON ob.id = att.booking_id
+      WHERE ob.space_id = $1 AND ob.status = 'confirmed' AND ob.starts_at < $3 AND ob.ends_at > $2`,
+    [booking.space_id, booking.starts_at, booking.ends_at],
+  );
+  if (n >= booking.group_size) return `El cupo de ${booking.title} está completo (${n}/${booking.group_size})`;
+  if (inSpace >= space.max_capacity) return `El aforo de ${space.name} está completo (${inSpace}/${space.max_capacity})`;
+  return null;
 }
 
 /** Registra (o simula con dryRun) el ingreso de un cliente. Lanza HttpError con el motivo si no procede */
@@ -106,24 +120,16 @@ async function performScan(db: Db, user: AuthUser, b: ScanInput) {
     }
 
     // ---------------------------------------------------------------- Aforo (RQ20)
-    let full: string | null = null;
-    if (booking) {
-      const [{ n }] = await db.query(`SELECT count(*)::int AS n FROM attendances WHERE booking_id = $1`, [booking.id]);
-      const [space] = await db.query(`SELECT name, max_capacity FROM spaces WHERE id = $1`, [booking.space_id]);
-      const [{ inSpace }] = await db.query(
-        `SELECT count(*)::int AS "inSpace" FROM attendances att JOIN bookings ob ON ob.id = att.booking_id
-          WHERE ob.space_id = $1 AND ob.status = 'confirmed' AND ob.starts_at < $3 AND ob.ends_at > $2`,
-        [booking.space_id, booking.starts_at, booking.ends_at],
-      );
-      if (n >= booking.group_size) full = `El cupo de ${booking.title} está completo (${n}/${booking.group_size})`;
-      else if (inSpace >= space.max_capacity) full = `El aforo de ${space.name} está completo (${inSpace}/${space.max_capacity})`;
-    }
     const canOverride = user.permissions.includes('override_capacity');
-    if (full && !b.override) {
-      const contacts = canOverride ? [] : await capacityContacts(db, tenantId);
-      throw new HttpError(409, full, 'CAPACITY_FULL', { canOverride, contacts, client: { id: client.id, fullName: client.full_name } });
-    }
-    if (full && !canOverride) throw new HttpError(403, 'No tienes permiso para registrar ingresos por fuera del aforo', 'FORBIDDEN');
+    const assertRoom = async (q: Db, full: string | null) => {
+      if (full && !b.override) {
+        const contacts = canOverride ? [] : await capacityContacts(q, tenantId);
+        throw new HttpError(409, full, 'CAPACITY_FULL', { canOverride, contacts, client: { id: client.id, fullName: client.full_name } });
+      }
+      if (full && !canOverride) throw new HttpError(403, 'No tienes permiso para registrar ingresos por fuera del aforo', 'FORBIDDEN');
+    };
+    let full = booking ? await capacityFull(db, booking) : null;
+    await assertRoom(db, full);
 
     const summary = {
       client: { id: client.id, fullName: client.full_name, document: client.document },
@@ -138,6 +144,16 @@ async function performScan(db: Db, user: AuthUser, b: ScanInput) {
     if (b.dryRun) return { ok: true, dryRun: true, attendanceId: null as number | null, ...summary };
 
     const attendanceId = await db.tx(async (q) => {
+      if (booking) {
+        // Serializa los ingresos del mismo espacio y clase y vuelve a validar con los bloqueos tomados: dos
+        // escaneos simultaneos no pueden ocupar a la vez el ultimo cupo ni registrar dos veces al mismo cliente
+        await lockRow(q, 'spaces', booking.space_id);
+        await lockRow(q, 'bookings', booking.id);
+        const [dup] = await q.query(`SELECT 1 FROM attendances WHERE client_id = $1 AND booking_id = $2`, [client.id, booking.id]);
+        if (dup) throw new HttpError(409, `${client.full_name} ya registró su ingreso a ${booking.title}`, 'ALREADY_REGISTERED');
+        full = await capacityFull(q, booking);
+        await assertRoom(q, full);
+      }
       if (membership && membership.units_total != null) {
         // Descuento atomico: si otro escaneo simultaneo agoto el saldo, no se actualiza ninguna fila
         const upd = await q.query(
@@ -153,7 +169,7 @@ async function performScan(db: Db, user: AuthUser, b: ScanInput) {
       );
       return a.id as number;
     });
-    return { ok: true, dryRun: false, attendanceId: attendanceId as number | null, ...summary };
+    return { ok: true, dryRun: false, attendanceId: attendanceId as number | null, ...summary, overCapacity: !!full };
 }
 
 const REQUEST_SELECT = `
@@ -215,23 +231,34 @@ export function attendanceRoutes(db: Db) {
   });
 
   // Aprobar = registrar el ingreso por fuera del aforo a nombre de quien autoriza
+  // Todo en una transaccion con la solicitud bloqueada: si dos personas aprueban a la vez solo una registra el
+  // ingreso, y si el registro falla la solicitud sigue pendiente
   r.post('/attendance/requests/:id/approve', requirePerm('override_capacity'), async (req, res) => {
-    const [cq] = await db.query(`SELECT * FROM capacity_requests WHERE id = $1 AND tenant_id = $2`, [parse(id, req.params.id), req.user.tenantId]);
-    if (!cq) throw new HttpError(404, 'Solicitud no encontrada', 'NOT_FOUND');
-    if (cq.status !== 'pending') throw new HttpError(409, 'La solicitud ya fue atendida', 'ALREADY_RESOLVED');
-    const out = await performScan(db, req.user, { clientId: cq.client_id, academyId: cq.academy_id, siteId: cq.site_id, bookingId: cq.booking_id, override: true, dryRun: false });
-    await db.query(
-      `UPDATE capacity_requests SET status = 'approved', resolved_by = $2, resolved_at = $3, attendance_id = $4 WHERE id = $1`,
-      [cq.id, req.user.id, new Date(), out.attendanceId ?? null],
-    );
+    const requestId = parse(id, req.params.id);
+    const out = await db.tx(async (q) => {
+      await lockRow(q, 'capacity_requests', requestId);
+      const [cq] = await q.query(`SELECT * FROM capacity_requests WHERE id = $1 AND tenant_id = $2`, [requestId, req.user.tenantId]);
+      if (!cq) throw new HttpError(404, 'Solicitud no encontrada', 'NOT_FOUND');
+      if (cq.status !== 'pending') throw new HttpError(409, 'La solicitud ya fue atendida', 'ALREADY_RESOLVED');
+      const scan = await performScan(q, req.user, { clientId: cq.client_id, academyId: cq.academy_id, siteId: cq.site_id, bookingId: cq.booking_id, override: true, dryRun: false });
+      await q.query(
+        `UPDATE capacity_requests SET status = 'approved', resolved_by = $2, resolved_at = $3, attendance_id = $4 WHERE id = $1`,
+        [cq.id, req.user.id, new Date(), scan.attendanceId ?? null],
+      );
+      return scan;
+    });
     res.json(out);
   });
 
   r.post('/attendance/requests/:id/reject', requirePerm('override_capacity'), async (req, res) => {
-    const [cq] = await db.query(`SELECT id, status FROM capacity_requests WHERE id = $1 AND tenant_id = $2`, [parse(id, req.params.id), req.user.tenantId]);
+    const requestId = parse(id, req.params.id);
+    const [cq] = await db.query(`SELECT id FROM capacity_requests WHERE id = $1 AND tenant_id = $2`, [requestId, req.user.tenantId]);
     if (!cq) throw new HttpError(404, 'Solicitud no encontrada', 'NOT_FOUND');
-    if (cq.status !== 'pending') throw new HttpError(409, 'La solicitud ya fue atendida', 'ALREADY_RESOLVED');
-    await db.query(`UPDATE capacity_requests SET status = 'rejected', resolved_by = $2, resolved_at = $3 WHERE id = $1`, [cq.id, req.user.id, new Date()]);
+    const upd = await db.query(
+      `UPDATE capacity_requests SET status = 'rejected', resolved_by = $2, resolved_at = $3 WHERE id = $1 AND status = 'pending' RETURNING id`,
+      [cq.id, req.user.id, new Date()],
+    );
+    if (!upd.length) throw new HttpError(409, 'La solicitud ya fue atendida', 'ALREADY_RESOLVED');
     res.json({ ok: true });
   });
 

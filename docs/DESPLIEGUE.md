@@ -20,10 +20,13 @@ de ellas se ve en las demás.
    - `DATABASE_URL`: pega la cadena de Neon.
    - `RESEND_API_KEY` o `BREVO_API_KEY` y `MAIL_FROM`: correos automáticos (ver DESPLIEGUE_RENDER.md).
    - `ADMIN_SIGNUP_CODE`: opcional (vacío = cualquiera puede registrar una organización).
+   - `ADMIN_INITIAL_PASSWORD`: clave del usuario base `admin` (mínimo 8 caracteres). Si la dejas vacía se genera
+     una al azar y aparece una sola vez en *Logs*.
+   Sin `DATABASE_URL` el servicio no arranca y lo indica en *Logs* (en producción no usa la base embebida).
    Si ya existe un servicio `academiapass` creado con Node, elimínalo antes (Render no lo cambia a Docker).
 3. Pulsa **Apply** y espera el estado **Live**. Abre `https://<servicio>.onrender.com/api/health`: debe
-   responder `{"ok":true,...}`. Al arrancar se crean las tablas y el usuario `admin` (clave inicial
-   `Bogota.2027`) en la base de Neon.
+   responder `{"ok":true,...}`. Al arrancar se crean las tablas y el usuario `admin` (con la clave de
+   `ADMIN_INITIAL_PASSWORD` o la generada que muestra el log) en la base de Neon.
 4. Si ya habías creado el Blueprint y falló, ábrelo y pulsa **Manual sync** después de subir este cambio.
 
 Notas:

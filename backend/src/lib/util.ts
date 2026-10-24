@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { HttpError } from '../auth.ts';
-import type { Db } from '../db.ts';
+import { type Db, dialect } from '../db.ts';
 
 /** Zona horaria del negocio: agrupa reportes por semana/mes y valida horarios de atencion */
 export const TZ = process.env.APP_TIMEZONE ?? 'America/Bogota';
@@ -31,6 +31,21 @@ export async function ownAll(db: Db, table: 'academies' | 'sites', ids: number[]
   if (ids.length === 0) return;
   const rows = await db.query(`SELECT id FROM ${table} WHERE id IN ${idList([...new Set(ids)])} AND tenant_id = $1`, [tenantId]);
   if (rows.length !== new Set(ids).size) throw new HttpError(404, 'Alguna academia o sede no existe', 'NOT_FOUND');
+}
+
+/**
+ * Bloquea la fila hasta que termine la transaccion de `q`, para que dos peticiones simultaneas no pasen a la vez la
+ * misma validacion de cupo, aforo o cruce de horario (RQ18, RQ20, RQ38). Fuera de una transaccion no bloquea nada.
+ * Para no bloquearse mutuamente, cada transaccion toma los bloqueos en este orden:
+ * capacity_requests -> spaces -> bookings -> teachers -> users.
+ */
+export async function lockRow(q: Db, table: 'capacity_requests' | 'spaces' | 'bookings' | 'teachers' | 'users', rowId: number) {
+  await q.query(
+    dialect === 'mssql'
+      ? `SELECT id FROM ${table} WITH (UPDLOCK, HOLDLOCK, ROWLOCK) WHERE id = $1`
+      : `SELECT id FROM ${table} WHERE id = $1 FOR UPDATE`,
+    [rowId],
+  );
 }
 
 export function joinCode() {

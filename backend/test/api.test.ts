@@ -3,11 +3,15 @@
  * Ejecutar: npm test
  */
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
 
 process.env.PGLITE_DIR = 'memory://';
 process.env.JWT_SECRET = 'test-secret';
+// Clave del usuario base en las pruebas: se genera en cada corrida, no se escribe en el codigo
+const ROOT_PASSWORD = randomUUID();
+process.env.ADMIN_INITIAL_PASSWORD = ROOT_PASSWORD;
 // Zona horaria de la prueba: se elige para que la hora local sea cerca del mediodia, asi los horarios de las sedes
 // (05:00-23:00) y las ventanas de "hoy" no dependen de la hora a la que se corran las pruebas
 const OFFSET_H = (() => { const o = 12 - new Date().getUTCHours(); return o > 14 ? o - 24 : o < -12 ? o + 24 : o; })();
@@ -45,7 +49,7 @@ const ok = async (method: string, path: string, body?: unknown, token?: string) 
 async function registerAdmin(body: Record<string, unknown>) {
   const reg = await ok('POST', '/auth/register-admin', body);
   assert.equal(reg.pending, true);
-  const root = (await ok('POST', '/auth/login', { username: 'admin', password: 'Bogota.2027' })).token;
+  const root = (await ok('POST', '/auth/login', { username: 'admin', password: ROOT_PASSWORD })).token;
   const pending = await ok('GET', '/platform/tenants', undefined, root);
   const tenant = pending.find((t: any) => t.name === body.organization);
   await ok('POST', `/platform/tenants/${tenant.id}/approve`, {}, root);
@@ -86,7 +90,7 @@ describe('AcademiaPass API', () => {
     const [row] = await database.query(`SELECT password_hash, role FROM users WHERE username = 'admin'`);
     assert.equal(row.role, 'admin');
     assert.ok(row.password_hash.startsWith('$2') && !row.password_hash.includes('Bogota'), 'solo se guarda el hash');
-    const r = await ok('POST', '/auth/login', { username: 'admin', password: 'Bogota.2027' });
+    const r = await ok('POST', '/auth/login', { username: 'admin', password: ROOT_PASSWORD });
     assert.equal(r.user.role, 'admin');
     assert.equal((await call('POST', '/auth/login', { username: 'admin', password: 'otra' })).status, 401);
   });
@@ -96,7 +100,7 @@ describe('AcademiaPass API', () => {
     assert.equal(reg.pending, true);
     assert.equal(reg.token, undefined);
     assert.equal((await call('POST', '/auth/login', { username: 'pendiente', password: 'Clave.12345' })).body.code, 'TENANT_PENDING');
-    const root = (await ok('POST', '/auth/login', { username: 'admin', password: 'Bogota.2027' })).token;
+    const root = (await ok('POST', '/auth/login', { username: 'admin', password: ROOT_PASSWORD })).token;
     assert.equal((await ok('GET', '/me', undefined, root)).isSuperadmin, true);
     const list = await ok('GET', '/platform/tenants', undefined, root);
     const t = list.find((x: any) => x.name === 'Org Pendiente');
@@ -803,7 +807,7 @@ describe('AcademiaPass API', () => {
     assert.equal((await call('GET', '/me', undefined, ana)).status, 401);
   });
   it('el administrador general administra cualquier organizacion: usuarios, clientes y sus parametros (RQ70)', async () => {
-    const root = (await ok('POST', '/auth/login', { username: 'admin', password: 'Bogota.2027' })).token;
+    const root = (await ok('POST', '/auth/login', { username: 'admin', password: ROOT_PASSWORD })).token;
     const org = (await ok('GET', '/me', undefined, s.admin)).tenant;
     // Solo el administrador general entra a otras organizaciones
     assert.equal((await call('POST', `/platform/tenants/${org.id}/enter`, {}, s.admin)).status, 403);

@@ -6,14 +6,18 @@ PostgreSQL en la nube.
 
 ```
 AcademiaPass/
-├── backend/        API Node.js (Express 5 + PostgreSQL). También sirve la versión web.
-├── app-android/    App Expo (React Native) para Android y web. build-apk.ps1 genera el APK.
-├── app-ios/        La misma app para iOS (mismo src/). build-ipa.sh o GitHub Actions generan el IPA.
-├── resources/      androidapk/ (APK) e iosapk/ (IPA)
+├── backend/        API Node.js (Express 5 + PostgreSQL). Sirve la versión web ya compilada en backend/public.
 ├── docs/           Manual técnico, despliegue y guía de uso
-├── render.yaml     Despliegue en Render (API + web + PostgreSQL)
+├── render.yaml     Despliegue en Render (API + web, base en Neon)
+│   Solo en el repositorio local (no se suben a GitHub, ver .gitignore):
+├── app-android/    App Expo (React Native) para Android y web. build-apk.ps1 genera el APK.
+├── app-ios/        La misma app para iOS (mismo src/). build-ipa.sh genera el IPA.
+├── resources/      androidapk/ (APK) e iosapk/ (IPA)
 └── sync-src.ps1    Copia app-android/src a app-ios/src
 ```
+
+**Publicar cambios de la versión web:** el código de las apps no está en GitHub, así que Render no compila la web.
+En el PC: `cd app-android && npm run build:web` (deja la web en `backend/public`) y haz commit de `backend/public`.
 
 ## Empezar en local (sin instalar PostgreSQL)
 
@@ -42,6 +46,6 @@ y base en SQL Server en [`docs/SERVIDORES_Y_BASE_LOCAL.md`](docs/SERVIDORES_Y_BA
 ## Pruebas
 
 ```bash
-cd backend && npm test          # 12 escenarios de punta a punta sobre la API
-cd app-android && npx tsc --noEmit
+cd backend && npm test          # 12 escenarios de punta a punta sobre la API (tambien en GitHub Actions)
+cd app-android && npx tsc --noEmit   # solo en local
 ```

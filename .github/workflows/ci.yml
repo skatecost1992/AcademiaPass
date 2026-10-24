@@ -1,4 +1,4 @@
-# Pruebas de la API y verificacion de tipos de las apps en cada cambio
+# Pruebas de la API en cada cambio (las apps quedan solo en el repositorio local: npx tsc --noEmit en cada una)
 name: CI
 
 on:
@@ -19,19 +19,3 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm test
-
-  apps:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        app: [app-android, app-ios]
-    defaults:
-      run:
-        working-directory: ${{ matrix.app }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - run: npm ci --legacy-peer-deps
-      - run: npx tsc --noEmit

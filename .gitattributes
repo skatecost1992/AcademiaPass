@@ -4,3 +4,5 @@
 Caddyfile text eol=lf
 Dockerfile text eol=lf
 deploy/** text eol=lf
+# Web compilada (Expo): se sube tal cual, sin convertir fines de linea
+backend/public/** -text

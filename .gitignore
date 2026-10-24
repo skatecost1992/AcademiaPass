@@ -1,13 +1,14 @@
 node_modules/
 .data/
 .env
-backend/public/
-app-*/android/
-app-*/ios/
-app-*/.expo/
-app-*/dist/
-app-*/build/
 *.log
 *.apk
 *.ipa
-app-*/android/
+
+# Las apps (Android/iOS) y sus herramientas quedan solo en el repositorio local. A GitHub va el servicio (backend)
+# y la version web ya compilada en backend/public (cd app-android && npm run build:web)
+app-android/
+app-ios/
+resources/
+sync-src.ps1
+.github/workflows/ios-ipa.yml

@@ -9,6 +9,12 @@ Teléfonos / navegador ──HTTPS──> Render (Docker: API + web) ──> Neo
 UptimeRobot (cada 5 min) ──────────┘          └──────────────> Resend / Brevo (correos)
 ```
 
+La versión web llega ya compilada en `backend/public` (el código de las apps solo está en el repositorio local). Si
+cambias pantallas de la app: en el PC `cd app-android && npm run build:web`, commit de `backend/public` y push.
+
+Si mantienes un servicio con entorno *Node* en vez de Docker, su *Build Command* debe ser solo
+`cd backend && npm ci` (ya no existe `app-android` en GitHub) y su *Start Command* `cd backend && npm start`.
+
 ## Por qué el servicio anterior no respondía
 
 El servicio `academiapass` se creó con el entorno *Node* y no quedó en estado **Live** (las peticiones no
